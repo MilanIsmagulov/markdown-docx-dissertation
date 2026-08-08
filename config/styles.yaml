@@ -1,0 +1,132 @@
+# Semantic presentation rules. The renderer maps these values to Word styles;
+# source Markdown remains presentation-independent and Obsidian-compatible.
+profile: gost-r-7.0.11-2011
+
+document:
+  language: ru-RU
+  page_size: A4
+  margins:
+    left: 25mm
+    right: 10mm
+    top: 20mm
+    bottom: 20mm
+  header_distance: 8mm
+  footer_distance: 10mm
+
+body:
+  font:
+    family: Times New Roman
+    size: 14pt
+    color: "000000"
+  alignment: justify
+  line_spacing: 1.5
+  first_line_indent: 12.5mm
+  space_before: 0pt
+  space_after: 0pt
+  widow_control: true
+  hyphenation: true
+
+headings:
+  chapter:
+    font: {family: Times New Roman, size: 14pt, bold: true}
+    case: preserve
+    alignment: center
+    page_break_before: true
+    space_before: 0pt
+    space_after: 18pt
+    keep_with_next: true
+    numbering: decimal
+  section:
+    font: {family: Times New Roman, size: 14pt, bold: true}
+    alignment: left
+    keep_with_next: true
+    space_before: 18pt
+    space_after: 18pt
+    numbering: chapter
+  subsection:
+    font: {family: Times New Roman, size: 14pt, bold: false}
+    alignment: left
+    keep_with_next: true
+    space_before: 18pt
+    space_after: 18pt
+    numbering: section
+
+lists:
+  compact: true
+  left_indent: 12.5mm
+  unordered_marker: en_dash
+  ordered:
+    level_1: "1)"
+    level_2: "а)"
+    level_3: "1)"
+
+figures:
+  alignment: center
+  caption:
+    position: below
+    alignment: center
+    label: Рисунок
+    separator: " – "
+    font: {family: Times New Roman, size: 14pt}
+  numbering: chapter
+  subfigure_labels: russian_lowercase
+
+tables:
+  alignment: center
+  caption:
+    position: above
+    alignment: left
+    label: Таблица
+    separator: " – "
+    font: {family: Times New Roman, size: 14pt}
+  numbering: chapter
+  repeat_header: true
+  allow_row_break_across_pages: false
+
+math:
+  source: latex
+  font: Cambria Math
+  renderer:
+    primary: omml
+    fallback: svg
+  inline: {alignment: baseline}
+  display:
+    alignment: center
+    numbering: chapter
+    number_alignment: right
+  reference_format: "({number})"
+
+references:
+  figure: "рисунок {number}"
+  table: "таблица {number}"
+  equation: "({number})"
+  chapter: "глава {number}"
+  section: "раздел {number}"
+  appendix: "приложение {number}"
+  hyperlinks: true
+  print_color: "000000"
+
+appendices:
+  numbering: russian_uppercase
+  excluded_letters: [Ё, З, Й, О, Ч, Ь, Ы, Ъ]
+
+bibliography:
+  style: gost
+  locale: ru-RU
+  show_medium_designator: true
+  sources: [author.bib, registered.bib, external.bib]
+
+modes:
+  final:
+    show_comments: false
+    show_diagnostics: false
+    colored_links: false
+  draft:
+    show_comments: true
+    show_diagnostics: true
+    colored_links: true
+
+page_numbers:
+  position: top-center
+  show_on_first_page: true
+

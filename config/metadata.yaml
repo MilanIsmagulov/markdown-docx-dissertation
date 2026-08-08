@@ -1,0 +1,37 @@
+title: >
+  Название диссертационной работы
+
+document_type: Диссертация
+degree: кандидата технических наук
+
+author:
+  full_name: Иванов Иван Иванович
+
+organization:
+  full_name: >
+    Федеральное государственное бюджетное образовательное учреждение высшего образования
+    «Название университета»
+
+specialty:
+  code: "2.3.1"
+  name: >
+    Системный анализ, управление и обработка информации, статистика
+
+supervisor:
+  full_name: Иванов Иван Иванович
+  degree: доктор технических наук
+  title: профессор
+
+city: Город
+year: 2000
+
+# Структура исходников. Команда `python build.py scaffold` создаёт недостающие
+# файлы, но не перезаписывает уже написанный текст в преамбулах и параграфах.
+structure:
+  chapters: 4
+  paragraphs_per_chapter: 4
+  appendices: 3
+  chapter_title_template: "Глава {chapter}. Тест"
+  paragraph_title_template: "{chapter}.{paragraph}. Параграф"
+  preamble_title_template: "Преамбула главы {chapter}"
+  conclusions_title_template: "Выводы по главе {chapter}"
