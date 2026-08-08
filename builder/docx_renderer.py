@@ -106,11 +106,20 @@ def _add_page_number(paragraph) -> None:
     run._r.extend((begin, instruction, end))
 
 
-def _add_title_paragraph(document: Document, text: str, *, alignment, bold=False, before=0, after=0):
+def _add_title_paragraph(
+    document: Document,
+    text: str,
+    *,
+    alignment,
+    bold=False,
+    before=0,
+    after=0,
+    line_spacing=1.5,
+):
     paragraph = document.add_paragraph()
     paragraph.alignment = alignment
     paragraph.paragraph_format.first_line_indent = Mm(0)
-    paragraph.paragraph_format.line_spacing = 1.0
+    paragraph.paragraph_format.line_spacing = float(line_spacing)
     paragraph.paragraph_format.space_before = Pt(before)
     paragraph.paragraph_format.space_after = Pt(after)
     run = paragraph.add_run(text)
@@ -135,18 +144,27 @@ def _prepend_title_page(document: Document, metadata: dict) -> None:
     elements = []
 
     if organization:
-        elements.append(_add_title_paragraph(document, organization, alignment=WD_ALIGN_PARAGRAPH.CENTER))
+        elements.append(
+            _add_title_paragraph(
+                document,
+                organization,
+                alignment=WD_ALIGN_PARAGRAPH.CENTER,
+                before=24,
+                after=24,
+            )
+        )
     elements.append(
         _add_title_paragraph(
             document,
             "На правах рукописи",
             alignment=WD_ALIGN_PARAGRAPH.RIGHT,
-            before=18,
+            before=24,
+            after=24,
         )
     )
     if author:
         elements.append(
-            _add_title_paragraph(document, author, alignment=WD_ALIGN_PARAGRAPH.CENTER, bold=True, before=54, after=24)
+            _add_title_paragraph(document, author, alignment=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=8)
         )
     elements.append(
         _add_title_paragraph(
@@ -154,52 +172,77 @@ def _prepend_title_page(document: Document, metadata: dict) -> None:
             str(metadata.get("title", "")).upper(),
             alignment=WD_ALIGN_PARAGRAPH.CENTER,
             bold=True,
-            after=30,
+            before=42,
+            after=42,
         )
     )
-    elements.append(
-        _add_title_paragraph(
-            document,
-            metadata.get("document_type", "ДИССЕРТАЦИЯ"),
-            alignment=WD_ALIGN_PARAGRAPH.CENTER,
-            bold=True,
-            after=12,
+    if specialty.get("code") or specialty.get("name"):
+        specialty_text = " ".join(
+            item
+            for item in (
+                f"Специальность {specialty['code']}" if specialty.get("code") else "",
+                "–" if specialty.get("code") and specialty.get("name") else "",
+                specialty.get("name", ""),
+            )
+            if item
         )
-    )
-    if specialty.get("code"):
         elements.append(
             _add_title_paragraph(
                 document,
-                f"по специальности {specialty['code']}",
+                specialty_text,
                 alignment=WD_ALIGN_PARAGRAPH.CENTER,
+                before=24,
+                after=24,
             )
         )
-    if specialty.get("name"):
-        elements.append(
-            _add_title_paragraph(document, specialty["name"], alignment=WD_ALIGN_PARAGRAPH.CENTER, after=12)
-        )
+    dissertation_text = metadata.get("document_type", "Диссертация")
     if metadata.get("degree"):
+        dissertation_text += f" на соискание ученой степени {metadata['degree']}"
+    if dissertation_text:
         elements.append(
             _add_title_paragraph(
                 document,
-                f"на соискание ученой степени {metadata['degree']}",
+                dissertation_text,
                 alignment=WD_ALIGN_PARAGRAPH.CENTER,
+                before=24,
+                after=24,
             )
         )
-    supervisor_text = " ".join(
-        item for item in (supervisor.get("degree", ""), supervisor.get("title", ""), supervisor.get("full_name", "")) if item
-    )
-    if supervisor_text:
+    if any(supervisor.get(key) for key in ("degree", "title", "full_name")):
         elements.append(
             _add_title_paragraph(
                 document,
-                f"Научный руководитель:\n{supervisor_text}",
+                "Научный руководитель:",
                 alignment=WD_ALIGN_PARAGRAPH.RIGHT,
-                before=42,
+                after=8,
+                line_spacing=1.16,
             )
         )
-    place = " ".join(str(item) for item in (metadata.get("city", ""), metadata.get("year", "")) if item)
-    last = _add_title_paragraph(document, place, alignment=WD_ALIGN_PARAGRAPH.CENTER, before=72)
+        degree_and_title = ", ".join(
+            item for item in (supervisor.get("degree", ""), supervisor.get("title", "")) if item
+        )
+        if degree_and_title:
+            elements.append(
+                _add_title_paragraph(
+                    document,
+                    degree_and_title,
+                    alignment=WD_ALIGN_PARAGRAPH.RIGHT,
+                    after=8,
+                    line_spacing=1.16,
+                )
+            )
+        if supervisor.get("full_name"):
+            elements.append(
+                _add_title_paragraph(
+                    document,
+                    supervisor["full_name"],
+                    alignment=WD_ALIGN_PARAGRAPH.RIGHT,
+                    after=84,
+                    line_spacing=1.16,
+                )
+            )
+    place = " – ".join(str(item) for item in (metadata.get("city", ""), metadata.get("year", "")) if item)
+    last = _add_title_paragraph(document, place, alignment=WD_ALIGN_PARAGRAPH.CENTER)
     last.add_run().add_break(WD_BREAK.PAGE)
     elements.append(last)
 
@@ -263,6 +306,12 @@ def render_docx(project_root: Path, markdown_path: Path, output_path: Path) -> P
             footer.paragraphs[0].clear()
             _add_page_number(footer.paragraphs[0])
     _set_repeatable_styles(document, styles)
+    first_chapter = next((p for p in document.paragraphs if p.style.name == "Heading 1"), None)
+    if first_chapter is not None:
+        # Pandoc already places the document body after the TOC. Suppressing
+        # the inherited chapter page break here avoids an empty page between
+        # the TOC and chapter 1 while later chapters still start on new pages.
+        first_chapter.paragraph_format.page_break_before = False
     _prepend_title_page(document, metadata)
     _request_field_updates(document)
     for paragraph in document.paragraphs:
