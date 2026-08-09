@@ -48,7 +48,10 @@ def _set_repeatable_styles(document: Document, styles: dict) -> None:
     _set_font(normal, body["font"]["family"], body["font"]["size"])
     normal.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     normal.paragraph_format.line_spacing = float(body["line_spacing"])
-    normal.paragraph_format.first_line_indent = Mm(_number(body["first_line_indent"], "mm"))
+    # Keep Normal neutral: Word rebuilds field-generated TOC styles from it.
+    # The dissertation red line is applied directly to source body paragraphs
+    # below, so generated fields do not inherit a 12.5 mm first-line indent.
+    normal.paragraph_format.first_line_indent = Mm(0)
     normal.paragraph_format.space_before = Pt(_number(body["space_before"], "pt"))
     normal.paragraph_format.space_after = Pt(_number(body["space_after"], "pt"))
 
@@ -83,9 +86,9 @@ def _set_repeatable_styles(document: Document, styles: dict) -> None:
         ("TOC 2", WD_ALIGN_PARAGRAPH.LEFT, False),
         ("TOC 3", WD_ALIGN_PARAGRAPH.LEFT, False),
     ):
-        if name not in document.styles:
+        style = next((item for item in document.styles if item.name.casefold() == name.casefold()), None)
+        if style is None:
             continue
-        style = document.styles[name]
         _set_font(style, body["font"]["family"], body["font"]["size"], bold)
         style.font.color.rgb = RGBColor(0, 0, 0)
         style.paragraph_format.alignment = alignment
@@ -93,6 +96,10 @@ def _set_repeatable_styles(document: Document, styles: dict) -> None:
         style.paragraph_format.line_spacing = 1.0
         style.paragraph_format.space_before = Pt(0)
         style.paragraph_format.space_after = Pt(6 if name == "TOC Heading" else 0)
+        if name != "TOC Heading":
+            based_on = style.element.find(qn("w:basedOn"))
+            if based_on is not None:
+                style.element.remove(based_on)
 
     if "Bibliography" in document.styles:
         bibliography = document.styles["Bibliography"]
@@ -480,6 +487,10 @@ def render_docx(
             footer.paragraphs[0].clear()
             _add_page_number(footer.paragraphs[0])
     _set_repeatable_styles(document, styles)
+    body_first_line_indent = Mm(_number(styles["body"]["first_line_indent"], "mm"))
+    for paragraph in document.paragraphs:
+        if paragraph.style.name in {"Normal", "First Paragraph"}:
+            paragraph.paragraph_format.first_line_indent = body_first_line_indent
     first_chapter = next((p for p in document.paragraphs if p.style.name == "Heading 1"), None)
     if first_chapter is not None:
         # Pandoc already places the document body after the TOC. Suppressing
