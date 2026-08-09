@@ -183,12 +183,7 @@ def _format_numbered_equations(document: Document, styles: dict) -> None:
     usable_width_mm = 210 - _number(styles["document"]["margins"]["left"], "mm") - _number(
         styles["document"]["margins"]["right"], "mm"
     )
-    # Word centers tables against the page rather than the asymmetric GOST
-    # text area (25 mm left, 10 mm right). A 160 mm equation row keeps equal
-    # visual tabs and leaves the right-hand number safely inside the page.
-    total_twips = int(Mm(min(usable_width_mm, 160)).twips)
-    widths = [int(total_twips * 0.15), int(total_twips * 0.70)]
-    widths.append(total_twips - sum(widths))
+    usable_twips = int(Mm(usable_width_mm).twips)
 
     paragraphs = list(document.paragraphs)
     for marker_index, marker in enumerate(paragraphs):
@@ -202,51 +197,38 @@ def _format_numbered_equations(document: Document, styles: dict) -> None:
         if formula is None:
             raise ValueError(f"equation marker {match.group(0)} is not followed by display math")
 
-        table = document.add_table(rows=1, cols=3)
-        table.alignment = WD_TABLE_ALIGNMENT.CENTER
-        table.autofit = False
-        marker._p.addprevious(table._tbl)
-        table_properties = table._tbl.tblPr
-        table_width = table_properties.find(qn("w:tblW"))
-        if table_width is None:
-            table_width = OxmlElement("w:tblW")
-            table_properties.insert(0, table_width)
-        table_width.set(qn("w:type"), "dxa")
-        table_width.set(qn("w:w"), str(total_twips))
-        layout = OxmlElement("w:tblLayout")
-        layout.set(qn("w:type"), "fixed")
-        table_properties.append(layout)
-        borders = OxmlElement("w:tblBorders")
-        for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
-            border = OxmlElement(f"w:{edge}")
-            border.set(qn("w:val"), "nil")
-            borders.append(border)
-        table_properties.append(borders)
-
-        for grid_column, width in zip(table._tbl.tblGrid.gridCol_lst, widths):
-            grid_column.set(qn("w:w"), str(width))
-        cells = table.rows[0].cells
-        for cell, width in zip(cells, widths):
-            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-            tc_width = cell._tc.get_or_add_tcPr().find(qn("w:tcW"))
-            if tc_width is not None:
-                tc_width.set(qn("w:type"), "dxa")
-                tc_width.set(qn("w:w"), str(width))
-
-        center = cells[1]
-        for child in list(center._tc):
-            if child.tag == qn("w:p"):
-                center._tc.remove(child)
-        center._tc.append(formula._p)
-        formula.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        # Match MathType's layout: one paragraph with a centered tab for the
+        # editable OMML equation and a right tab for its number. Unlike a
+        # borderless table, this cannot alter the geometry of adjacent tables.
+        formula.alignment = WD_ALIGN_PARAGRAPH.LEFT
         formula.paragraph_format.first_line_indent = Mm(0)
+        formula.paragraph_format.left_indent = Mm(0)
+        formula.paragraph_format.right_indent = Mm(0)
         formula.paragraph_format.space_before = Pt(6)
         formula.paragraph_format.space_after = Pt(6)
+        ppr = formula._p.get_or_add_pPr()
+        tabs = ppr.find(qn("w:tabs"))
+        if tabs is not None:
+            ppr.remove(tabs)
+        tabs = OxmlElement("w:tabs")
+        for alignment, position in (("center", usable_twips // 2), ("right", usable_twips)):
+            tab = OxmlElement("w:tab")
+            tab.set(qn("w:val"), alignment)
+            tab.set(qn("w:pos"), str(position))
+            tabs.append(tab)
+        ppr.append(tabs)
 
-        number_paragraph = cells[2].paragraphs[0]
-        number_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        number_paragraph.paragraph_format.first_line_indent = Mm(0)
-        number_run = number_paragraph.add_run(f"({match['number']})")
+        math_para = formula._p.find(qn("m:oMathPara"))
+        math = math_para.find(qn("m:oMath")) if math_para is not None else None
+        if math is None:
+            raise ValueError(f"equation marker {match.group(0)} has no Office Math object")
+        math_para.remove(math)
+        formula._p.remove(math_para)
+
+        formula.add_run("\t")
+        formula._p.append(math)
+        formula.add_run("\t")
+        number_run = formula.add_run(f"({match['number']})")
         number_run.font.name = family
         number_run.font.size = Pt(14)
         marker._element.getparent().remove(marker._element)

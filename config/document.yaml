@@ -2,7 +2,7 @@ document:
   language: ru
   content: content
   root: content/root.md
-  output: build/dissertation-gost-title-v3.docx
+  output: build/dissertation-gost-title-v4.docx
   assembled_markdown: build/assembled.md
 
 page:
