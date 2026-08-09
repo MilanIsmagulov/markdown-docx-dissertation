@@ -9,6 +9,7 @@ from builder.resolver import build_index
 from builder.validator import validate_index
 from builder.assembler import assemble_note
 from builder.assets import process_assets
+from builder import assets as assets_module
 from builder.docx_renderer import _set_font
 from builder.config import load_document_config
 from docx import Document
@@ -149,6 +150,35 @@ latex: Q = A + B
     assert "$$\nQ = A + B\n$$" in result
 
 
+def test_pdf_transclusion_is_validated_preserved_and_expanded(tmp_path: Path, monkeypatch) -> None:
+    root = write_note(tmp_path, "root.md", "![[appendix]]\n")
+    write_note(tmp_path, "appendix.md", "# ПРИЛОЖЕНИЕ А\n\n![[assets/document.pdf]]\n")
+    pdf = tmp_path / "content" / "assets" / "document.pdf"
+    pdf.parent.mkdir(parents=True)
+    pdf.write_bytes(b"%PDF-demo")
+    index = build_index(tmp_path, tmp_path / "content")
+    assert validate_index(index, root) == []
+    root_note = next(note for note in index.notes if note.path == root)
+    assembled = assemble_note(index, root_note)
+    assert "![[assets/document.pdf]]" in assembled
+
+    page_one = tmp_path / "page-1.png"
+    page_two = tmp_path / "page-2.png"
+    page_one.write_bytes(b"png")
+    page_two.write_bytes(b"png")
+    monkeypatch.setattr(assets_module, "_render_pdf_pages", lambda source, content, page=None: [page_one, page_two])
+    expanded = process_assets(assembled, tmp_path / "content")
+    assert "page-1.png" in expanded
+    assert "[[PDF_PAGE_BREAK]]" in expanded
+    assert "page-2.png" in expanded
+
+
+def test_validator_reports_missing_pdf_asset(tmp_path: Path) -> None:
+    root = write_note(tmp_path, "root.md", "![[assets/missing.pdf]]\n")
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
+    assert {item.code for item in diagnostics} == {"E_ASSET_MISSING"}
+
+
 def test_scaffold_creates_nested_obsidian_structure_and_is_idempotent(tmp_path: Path) -> None:
     config = tmp_path / "config"
     config.mkdir()
@@ -165,18 +195,24 @@ def test_scaffold_creates_nested_obsidian_structure_and_is_idempotent(tmp_path: 
 
     created, chapters = scaffold(tmp_path)
     assert chapters == 2
-    assert created == 24
+    assert created == 27
     root = (tmp_path / "content" / "root.md").read_text(encoding="utf-8")
     chapter = (tmp_path / "content" / "01 Chapter" / "Глава 1. Тест.md").read_text(encoding="utf-8")
     assert "![[01 Chapter/Глава 1. Тест]]" in root
     assert "![[00 Front Matter/Введение]]" in root
     assert "![[90 Back Matter/Заключение]]" in root
+    assert "![[90 Back Matter/Список литературы]]" in root
+    assert "![[99 Appendices/Приложения]]" in root
     introduction = (tmp_path / "content" / "00 Front Matter" / "Введение.md").read_text(encoding="utf-8")
     assert "# ВВЕДЕНИЕ" in introduction
     assert "![[00 Front Matter/Актуальность темы]]" in introduction
     assert "![[00 Front Matter/Положения, выносимые на защиту]]" in introduction
     conclusion = (tmp_path / "content" / "90 Back Matter" / "Заключение.md").read_text(encoding="utf-8")
     assert "# ЗАКЛЮЧЕНИЕ" in conclusion
+    appendix_index = (tmp_path / "content" / "99 Appendices" / "Приложения.md").read_text(encoding="utf-8")
+    assert "![[99 Appendices/Приложение А]]" in appendix_index
+    appendix = (tmp_path / "content" / "99 Appendices" / "Приложение А.md").read_text(encoding="utf-8")
+    assert "# ПРИЛОЖЕНИЕ А" in appendix
     assert "![[01 Chapter/Преамбула главы 1]]" in chapter
     assert "![[01 Chapter/1.1. Авторское название]]" in chapter
     assert "![[01 Chapter/Выводы по главе 1]]" in chapter

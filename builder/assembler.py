@@ -54,6 +54,10 @@ def assemble_note(index: ProjectIndex, note: Note, heading: str | None = None, s
             if not match["embed"]:
                 continue
             expanded.append(line[cursor : match.start()])
+            if match["target"].strip().casefold().endswith(".pdf"):
+                expanded.append(line[match.start() : match.end()])
+                cursor = match.end()
+                continue
             link = next(item for item in note.links if item.raw == line[match.start() : match.end()])
             target, problem = index.resolve(link)
             if problem is not None or target is None:
@@ -66,4 +70,3 @@ def assemble_note(index: ProjectIndex, note: Note, heading: str | None = None, s
         else:
             output.append(line)
     return "\n".join(output).strip() + "\n"
-

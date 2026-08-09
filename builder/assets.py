@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +14,10 @@ DIRECTIVE_RE = re.compile(r"^```(?P<kind>table|figure|equation)\s*$")
 REFERENCE_RE = re.compile(r"\{\{ref:(?P<kind>table|figure|equation):(?P<id>[A-Za-z0-9_.-]+)}}")
 NUMBER_RE = re.compile(r"\{\{number:(?P<kind>table|figure|equation):(?P<id>[A-Za-z0-9_.-]+)}}")
 CHAPTER_RE = re.compile(r"^#\s+Глава\s+(?P<number>\d+)\b", re.IGNORECASE)
+PDF_EMBED_RE = re.compile(
+    r"^\s*!\[\[(?P<target>[^]|#]+\.pdf)(?:#page=(?P<page>\d+))?(?:\|[^]]+)?]]\s*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,38 @@ def _load_directive(lines: list[str], start: int) -> tuple[dict, int]:
     return config, closing + 1
 
 
+def _render_pdf_pages(source: Path, content_dir: Path, page: int | None = None) -> list[Path]:
+    pdftoppm = shutil.which("pdftoppm")
+    if pdftoppm is None:
+        raise ValueError("PDF embedding requires Poppler's pdftoppm executable")
+    executable = Path(pdftoppm)
+    if executable.suffix.casefold() in {".cmd", ".bat"}:
+        runtime_root = executable.parents[2]
+        native_candidates = list(runtime_root.glob("native/poppler/**/pdftoppm.exe"))
+        if native_candidates:
+            pdftoppm = str(native_candidates[0])
+    cache = content_dir.parent / "build" / "pdf-pages" / source.stem
+    cache.mkdir(parents=True, exist_ok=True)
+    prefix = cache / "page"
+    for stale_page in cache.glob("page-*.png"):
+        stale_page.unlink()
+    command = [pdftoppm, "-png", "-r", "200"]
+    if page is not None:
+        command.extend(["-f", str(page), "-l", str(page)])
+    command.extend([str(source), str(prefix)])
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.strip() if exc.stderr else str(exc)
+        raise ValueError(f"failed to render PDF {source}: {detail}") from exc
+    pages = sorted(cache.glob("page-*.png"), key=lambda path: int(path.stem.rsplit("-", 1)[1]))
+    if page is not None:
+        pages = [path for path in pages if int(path.stem.rsplit("-", 1)[1]) == page]
+    if not pages:
+        raise ValueError(f"PDF produced no pages: {source}")
+    return pages
+
+
 def process_assets(markdown: str, content_dir: Path) -> str:
     lines = markdown.splitlines()
     counters = {"table": 0, "figure": 0, "equation": 0}
@@ -73,6 +111,19 @@ def process_assets(markdown: str, content_dir: Path) -> str:
 
     while index < len(lines):
         line = lines[index]
+        pdf_match = PDF_EMBED_RE.match(line)
+        if pdf_match is not None:
+            source = (content_dir / pdf_match["target"].strip()).resolve()
+            if not source.is_relative_to(content_dir.resolve()) or not source.is_file():
+                raise ValueError(f"PDF asset not found: {source}")
+            requested_page = int(pdf_match["page"]) if pdf_match["page"] else None
+            pages = _render_pdf_pages(source, content_dir, requested_page)
+            for page_index, page_path in enumerate(pages):
+                if page_index:
+                    output.extend(("[[PDF_PAGE_BREAK]]", ""))
+                output.extend((f"![](<{page_path.as_posix()}>){{width=160mm}}", ""))
+            index += 1
+            continue
         chapter_match = CHAPTER_RE.match(line)
         if chapter_match is not None:
             chapter = int(chapter_match["number"])

@@ -25,6 +25,11 @@ def validate_index(index: ProjectIndex, root_note: Path | None = None) -> list[D
                 )
             seen_headings.add(key)
         for link in note.links:
+            if link.kind == "transclusion" and link.target.casefold().endswith(".pdf"):
+                asset = (index.content_dir / link.target).resolve()
+                if not asset.is_relative_to(index.content_dir.resolve()) or not asset.is_file():
+                    diagnostics.append(Diagnostic("E_ASSET_MISSING", f"PDF asset does not exist: '{link.target}'", link.location))
+                continue
             target, problem = index.resolve(link)
             if problem:
                 diagnostics.append(problem)
@@ -48,6 +53,8 @@ def _validate_transclusion_cycles(index: ProjectIndex) -> list[Diagnostic]:
     for note in index.notes:
         for link in note.links:
             if link.kind != "transclusion":
+                continue
+            if link.target.casefold().endswith(".pdf"):
                 continue
             target, problem = index.resolve(link)
             if target is not None and problem is None:
@@ -74,4 +81,3 @@ def _validate_transclusion_cycles(index: ProjectIndex) -> list[Diagnostic]:
         if note.path not in visited:
             visit(note, [])
     return diagnostics
-

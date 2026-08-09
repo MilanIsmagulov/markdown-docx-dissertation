@@ -268,6 +268,22 @@ def _format_numbered_equations(document: Document, styles: dict) -> None:
         marker._element.getparent().remove(marker._element)
 
 
+def _format_pdf_page_breaks(document: Document) -> None:
+    paragraphs = list(document.paragraphs)
+    for index, paragraph in enumerate(paragraphs):
+        if paragraph.text.strip() != "[[PDF_PAGE_BREAK]]":
+            continue
+        paragraph.clear()
+        paragraph.paragraph_format.first_line_indent = Mm(0)
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(0)
+        paragraph.add_run().add_break(WD_BREAK.PAGE)
+        if index + 1 < len(paragraphs):
+            image_paragraph = paragraphs[index + 1]
+            image_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            image_paragraph.paragraph_format.first_line_indent = Mm(0)
+
+
 def _add_title_paragraph(
     document: Document,
     text: str,
@@ -501,6 +517,7 @@ def render_docx(
     _request_field_updates(document)
     _format_numbered_objects(document, styles)
     _format_numbered_equations(document, styles)
+    _format_pdf_page_breaks(document)
     for paragraph in document.paragraphs:
         if paragraph._p.xpath(".//m:oMathPara"):
             paragraph.style = document.styles["Equation"]

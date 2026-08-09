@@ -25,12 +25,14 @@ INTRODUCTION_PARTS = (
     ("publications", "Публикации автора"),
     ("structure", "Структура и объём диссертации"),
 )
+APPENDIX_LETTERS = tuple(letter for letter in "АБВГДЕЖИКЛМНПРСТУФХЦШЩЭЮЯ")
 
 
 @dataclass(frozen=True)
 class Structure:
     chapters: int = 4
     paragraphs_per_chapter: int = 4
+    appendices: int = 1
     chapter_title_template: str = "Глава {chapter}. Тест"
     paragraph_title_template: str = "{chapter}.{paragraph}. Параграф"
     preamble_title_template: str = "Преамбула главы {chapter}"
@@ -45,8 +47,10 @@ def load_structure(project_root: Path) -> Structure:
         raise ValueError("metadata.structure must be a mapping")
     values = {field: raw[field] for field in Structure.__dataclass_fields__ if field in raw}
     structure = Structure(**values)
-    if structure.chapters < 1 or structure.paragraphs_per_chapter < 1:
+    if structure.chapters < 1 or structure.paragraphs_per_chapter < 1 or structure.appendices < 0:
         raise ValueError("structure counts must be positive integers")
+    if structure.appendices > len(APPENDIX_LETTERS):
+        raise ValueError(f"structure.appendices cannot exceed {len(APPENDIX_LETTERS)}")
     return structure
 
 
@@ -168,6 +172,36 @@ def scaffold(project_root: Path) -> tuple[int, int]:
         + "В заключении обобщаются результаты исследования, формулируются основные выводы, "
         + "рекомендации и направления дальнейшей работы.\n",
     )
+
+    references_rel = "90 Back Matter/Список литературы"
+    root_links.append(references_rel)
+    created += _write_new(
+        content / f"{references_rel}.md",
+        _front_matter("section:references", "bibliography", "Список литературы")
+        + "# СПИСОК ЛИТЕРАТУРЫ\n\n::: {#refs}\n:::\n",
+    )
+
+    appendices_rel = "99 Appendices/Приложения"
+    root_links.append(appendices_rel)
+    appendices_path = content / f"{appendices_rel}.md"
+    created += _write_new(
+        appendices_path,
+        _front_matter("section:appendices", "appendices", "Приложения"),
+    )
+    appendix_links: list[str] = []
+    for index in range(structure.appendices):
+        label = APPENDIX_LETTERS[index]
+        title = f"Приложение {label}"
+        relative = f"99 Appendices/{title}"
+        appendix_links.append(relative)
+        created += _write_new(
+            content / f"{relative}.md",
+            _front_matter(f"appendix:{label.casefold()}", "appendix", title)
+            + f"# ПРИЛОЖЕНИЕ {label}\n\n"
+            + "## Название приложения\n\n"
+            + "Здесь размещается текст приложения или встраивание PDF-документа.\n",
+        )
+    _replace_link_block(appendices_path, appendix_links, after_heading=False)
 
     if not root.exists():
         _write_new(root, _front_matter("document:root", "document", "Диссертация"))

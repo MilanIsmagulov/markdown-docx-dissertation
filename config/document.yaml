@@ -2,7 +2,7 @@ document:
   language: ru
   content: content
   root: content/root.md
-  output: build/dissertation-gost-title-v9.docx
+  output: build/dissertation-gost-title-v10.docx
   assembled_markdown: build/assembled.md
   bibliography: bibliography/bibliography.bib
   csl: assets/csl/gost-r-7-0-5-2008-numeric.csl

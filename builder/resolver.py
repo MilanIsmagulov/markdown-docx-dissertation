@@ -17,6 +17,7 @@ def _key(value: str) -> str:
 @dataclass(slots=True)
 class ProjectIndex:
     root: Path
+    content_dir: Path
     notes: list[Note] = field(default_factory=list)
     by_id: dict[str, Note] = field(default_factory=dict)
     by_name: dict[str, list[Note]] = field(default_factory=dict)
@@ -36,7 +37,7 @@ class ProjectIndex:
 
 
 def build_index(project_root: Path, content_dir: Path) -> ProjectIndex:
-    index = ProjectIndex(project_root)
+    index = ProjectIndex(project_root, content_dir)
     for path in sorted(content_dir.rglob("*.md")):
         try:
             note = parse_note(path)

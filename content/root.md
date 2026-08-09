@@ -11,4 +11,6 @@ title: Диссертация
 ![[03 Chapter/Глава 3. Тест]]
 ![[04 Chapter/Глава 4. Тест]]
 ![[90 Back Matter/Заключение]]
+![[90 Back Matter/Список литературы]]
+![[99 Appendices/Приложения]]
 <!-- scaffold:end -->

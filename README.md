@@ -124,3 +124,18 @@ The build runs Pandoc Citeproc with the numeric GOST CSL style configured in
 generated `СПИСОК ЛИТЕРАТУРЫ` section. Keep BibTeX keys stable when editing or
 exporting the library from Zotero. Obsidian's Citations plugin can use the same
 `.bib` file for searching and inserting keys.
+
+## PDF appendices
+
+Appendices are assembled through `content/99 Appendices/Приложения.md`. A PDF
+kept under `content/assets/appendices/` can be embedded with the same syntax
+that Obsidian uses for its native PDF viewer:
+
+```markdown
+![[assets/appendices/implementation-act.pdf]]
+```
+
+During DOCX assembly, Poppler renders every PDF page at 200 DPI. Pages are
+inserted at 160 mm width, and every page after the first starts on a new Word
+page. To insert only one page, use `![[assets/appendices/file.pdf#page=2]]`.
+The validator reports missing PDF assets before the build starts.
