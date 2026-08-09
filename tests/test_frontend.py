@@ -115,7 +115,11 @@ def test_asset_processor_numbers_csv_figure_equation_and_references(tmp_path: Pa
     assets.mkdir()
     (assets / "data.csv").write_text("Показатель,Значение\nТочность,0.93\n", encoding="utf-8")
     (assets / "scheme.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf-8")
-    markdown = """# Глава 1
+    markdown = """# ВВЕДЕНИЕ
+
+Вводный текст без нумерации главы.
+
+# Глава 1
 
 См. {{ref:table:data}}, {{ref:figure:scheme}} и {{ref:equation:score}}.
 
@@ -161,10 +165,18 @@ def test_scaffold_creates_nested_obsidian_structure_and_is_idempotent(tmp_path: 
 
     created, chapters = scaffold(tmp_path)
     assert chapters == 2
-    assert created == 10
+    assert created == 24
     root = (tmp_path / "content" / "root.md").read_text(encoding="utf-8")
     chapter = (tmp_path / "content" / "01 Chapter" / "Глава 1. Тест.md").read_text(encoding="utf-8")
     assert "![[01 Chapter/Глава 1. Тест]]" in root
+    assert "![[00 Front Matter/Введение]]" in root
+    assert "![[90 Back Matter/Заключение]]" in root
+    introduction = (tmp_path / "content" / "00 Front Matter" / "Введение.md").read_text(encoding="utf-8")
+    assert "# ВВЕДЕНИЕ" in introduction
+    assert "![[00 Front Matter/Актуальность темы]]" in introduction
+    assert "![[00 Front Matter/Положения, выносимые на защиту]]" in introduction
+    conclusion = (tmp_path / "content" / "90 Back Matter" / "Заключение.md").read_text(encoding="utf-8")
+    assert "# ЗАКЛЮЧЕНИЕ" in conclusion
     assert "![[01 Chapter/Преамбула главы 1]]" in chapter
     assert "![[01 Chapter/1.1. Авторское название]]" in chapter
     assert "![[01 Chapter/Выводы по главе 1]]" in chapter

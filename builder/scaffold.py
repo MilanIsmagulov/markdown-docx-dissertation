@@ -11,6 +11,21 @@ BEGIN = "<!-- scaffold:begin -->"
 END = "<!-- scaffold:end -->"
 TRANSCLUSION = re.compile(r"^\s*!\[\[[^]]+]]\s*$")
 
+INTRODUCTION_PARTS = (
+    ("relevance", "Актуальность темы"),
+    ("development", "Степень разработанности темы"),
+    ("goal-tasks", "Цель и задачи исследования"),
+    ("object-subject", "Объект и предмет исследования"),
+    ("methods", "Методы исследования"),
+    ("novelty", "Научная новизна"),
+    ("significance", "Теоретическая и практическая значимость"),
+    ("defense", "Положения, выносимые на защиту"),
+    ("validity", "Степень достоверности результатов"),
+    ("approbation", "Апробация результатов"),
+    ("publications", "Публикации автора"),
+    ("structure", "Структура и объём диссертации"),
+)
+
 
 @dataclass(frozen=True)
 class Structure:
@@ -78,8 +93,25 @@ def scaffold(project_root: Path) -> tuple[int, int]:
     structure = load_structure(project_root)
     content = project_root / "content"
     root = content / "root.md"
-    root_links: list[str] = []
+    root_links: list[str] = ["00 Front Matter/Введение"]
     created = 0
+
+    introduction_dir = content / "00 Front Matter"
+    introduction_path = introduction_dir / "Введение.md"
+    created += _write_new(
+        introduction_path,
+        _front_matter("section:introduction", "structural-section", "Введение") + "# ВВЕДЕНИЕ\n",
+    )
+    introduction_links: list[str] = []
+    for note_id, title in INTRODUCTION_PARTS:
+        relative = f"00 Front Matter/{title}"
+        introduction_links.append(relative)
+        created += _write_new(
+            content / f"{relative}.md",
+            _front_matter(f"introduction:{note_id}", "introduction-part", title)
+            + f"**{title}.** Здесь размещается текст соответствующего структурного элемента введения.\n",
+        )
+    _replace_link_block(introduction_path, introduction_links, after_heading=True)
 
     for chapter in range(1, structure.chapters + 1):
         chapter_title = structure.chapter_title_template.format(chapter=chapter)
@@ -126,6 +158,16 @@ def scaffold(project_root: Path) -> tuple[int, int]:
             + "обозначена их связь с последующими этапами исследования.\n",
         )
         _replace_link_block(chapter_path, chapter_links, after_heading=True)
+
+    conclusion_rel = "90 Back Matter/Заключение"
+    root_links.append(conclusion_rel)
+    created += _write_new(
+        content / f"{conclusion_rel}.md",
+        _front_matter("section:conclusion", "structural-section", "Заключение")
+        + "# ЗАКЛЮЧЕНИЕ\n\n"
+        + "В заключении обобщаются результаты исследования, формулируются основные выводы, "
+        + "рекомендации и направления дальнейшей работы.\n",
+    )
 
     if not root.exists():
         _write_new(root, _front_matter("document:root", "document", "Диссертация"))

@@ -11,6 +11,7 @@ import yaml
 DIRECTIVE_RE = re.compile(r"^```(?P<kind>table|figure|equation)\s*$")
 REFERENCE_RE = re.compile(r"\{\{ref:(?P<kind>table|figure|equation):(?P<id>[A-Za-z0-9_.-]+)}}")
 NUMBER_RE = re.compile(r"\{\{number:(?P<kind>table|figure|equation):(?P<id>[A-Za-z0-9_.-]+)}}")
+CHAPTER_RE = re.compile(r"^#\s+Глава\s+(?P<number>\d+)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -72,8 +73,9 @@ def process_assets(markdown: str, content_dir: Path) -> str:
 
     while index < len(lines):
         line = lines[index]
-        if line.startswith("# "):
-            chapter += 1
+        chapter_match = CHAPTER_RE.match(line)
+        if chapter_match is not None:
+            chapter = int(chapter_match["number"])
             counters = {kind: 0 for kind in counters}
             output.append(line)
             index += 1
