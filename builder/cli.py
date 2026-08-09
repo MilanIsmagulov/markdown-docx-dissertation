@@ -8,6 +8,7 @@ import yaml
 
 from .config import load_document_config
 from .assembler import assemble_note
+from .assets import process_assets
 from .docx_renderer import render_docx
 from .resolver import build_index
 from .scaffold import scaffold
@@ -48,7 +49,11 @@ def assemble(project_root: Path) -> int:
     if root_note is None:
         print(f"ERROR E_ROOT_MISSING: entry document was not indexed: {config.root_note}")
         return 1
-    output = assemble_note(index, root_note)
+    try:
+        output = process_assets(assemble_note(index, root_note), config.content_dir)
+    except ValueError as exc:
+        print(f"ERROR E_ASSET: {exc}")
+        return 1
     config.assembled_markdown.parent.mkdir(parents=True, exist_ok=True)
     config.assembled_markdown.write_text(output, encoding="utf-8")
     print(f"Assembled Markdown: {config.assembled_markdown.relative_to(project_root)}")

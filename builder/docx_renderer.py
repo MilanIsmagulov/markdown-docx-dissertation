@@ -8,6 +8,7 @@ import yaml
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.text import WD_BREAK
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.style import WD_STYLE_TYPE
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -104,6 +105,75 @@ def _add_page_number(paragraph) -> None:
     end = OxmlElement("w:fldChar")
     end.set(qn("w:fldCharType"), "end")
     run._r.extend((begin, instruction, end))
+
+
+def _format_numbered_objects(document: Document, styles: dict) -> None:
+    family = styles["body"]["font"]["family"]
+    for paragraph in document.paragraphs:
+        text = paragraph.text.strip()
+        if text.startswith("Таблица "):
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            paragraph.paragraph_format.first_line_indent = Mm(0)
+            paragraph.paragraph_format.space_before = Pt(6)
+            paragraph.paragraph_format.space_after = Pt(3)
+        elif text.startswith("Рисунок "):
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            paragraph.paragraph_format.first_line_indent = Mm(0)
+            paragraph.paragraph_format.space_before = Pt(3)
+            paragraph.paragraph_format.space_after = Pt(6)
+        else:
+            continue
+        for run in paragraph.runs:
+            run.font.name = family
+            run.font.size = Pt(14)
+            run.italic = False
+
+    usable_width_mm = 210 - _number(styles["document"]["margins"]["left"], "mm") - _number(
+        styles["document"]["margins"]["right"], "mm"
+    )
+    for table in document.tables:
+        if not table.rows or not table.columns:
+            continue
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        table.autofit = False
+        table_properties = table._tbl.tblPr
+        borders = table_properties.find(qn("w:tblBorders"))
+        if borders is None:
+            borders = OxmlElement("w:tblBorders")
+            table_properties.append(borders)
+        for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+            border = OxmlElement(f"w:{edge}")
+            border.set(qn("w:val"), "single")
+            border.set(qn("w:sz"), "4")
+            border.set(qn("w:color"), "000000")
+            borders.append(border)
+        column_width = Mm(usable_width_mm / len(table.columns))
+        for row_index, row in enumerate(table.rows):
+            row._tr.get_or_add_trPr()
+            if row_index == 0:
+                header = OxmlElement("w:tblHeader")
+                header.set(qn("w:val"), "true")
+                row._tr.get_or_add_trPr().append(header)
+            cannot_split = OxmlElement("w:cantSplit")
+            row._tr.get_or_add_trPr().append(cannot_split)
+            for cell in row.cells:
+                cell.width = column_width
+                cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                tc_width = cell._tc.get_or_add_tcPr().find(qn("w:tcW"))
+                if tc_width is not None:
+                    tc_width.set(qn("w:type"), "dxa")
+                    tc_width.set(qn("w:w"), str(int(column_width.twips)))
+                for paragraph in cell.paragraphs:
+                    paragraph.paragraph_format.first_line_indent = Mm(0)
+                    paragraph.paragraph_format.line_spacing = 1.0
+                    paragraph.paragraph_format.space_before = Pt(2)
+                    paragraph.paragraph_format.space_after = Pt(2)
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER if row_index == 0 else WD_ALIGN_PARAGRAPH.LEFT
+                    for run in paragraph.runs:
+                        run.font.name = family
+                        run.font.size = Pt(12)
+                        if row_index == 0:
+                            run.bold = True
 
 
 def _add_title_paragraph(
@@ -314,6 +384,7 @@ def render_docx(project_root: Path, markdown_path: Path, output_path: Path) -> P
         first_chapter.paragraph_format.page_break_before = False
     _prepend_title_page(document, metadata)
     _request_field_updates(document)
+    _format_numbered_objects(document, styles)
     for paragraph in document.paragraphs:
         if paragraph._p.xpath(".//m:oMathPara"):
             paragraph.style = document.styles["Equation"]

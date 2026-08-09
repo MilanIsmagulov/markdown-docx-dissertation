@@ -63,3 +63,44 @@ the YAML `id`) and renders the embedded formula. The stable `id` remains
 available to the compiler for semantic references. Then `python build.py
 assemble` writes the expanded formula to `build/assembled.md`.
 The future DOCX backend will render the same semantic equation as OMML.
+
+## Numbered tables, figures, and equations
+
+Markdown does not natively render an XLSX workbook. Keep source data in
+`content/assets/tables/` as CSV, TSV, or XLSX and insert it with a fenced
+directive. XLSX directives may select a worksheet with `sheet`:
+
+````markdown
+```table
+source: assets/tables/results.xlsx
+sheet: Experiment
+id: results
+caption: Results of the experiment
+```
+````
+
+Figures use PNG or JPEG assets from `content/assets/images/`:
+
+````markdown
+```figure
+source: assets/images/pipeline.png
+id: pipeline
+caption: Multimodal processing pipeline
+width: 150mm
+```
+````
+
+Numbered editable equations use LaTeX source:
+
+````markdown
+```equation
+id: quality
+latex: Q = \alpha A + \beta C
+```
+````
+
+Objects are numbered independently within each chapter. Use
+`{{ref:equation:quality}}` for a complete equation reference such as `(1.1)`.
+For Russian grammatical cases, insert only the number and write the surrounding
+phrase explicitly: `на рисунке {{number:figure:pipeline}}` or
+`в таблице {{number:table:results}}`.

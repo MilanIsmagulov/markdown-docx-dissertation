@@ -8,6 +8,7 @@ from builder.parser import parse_note
 from builder.resolver import build_index
 from builder.validator import validate_index
 from builder.assembler import assemble_note
+from builder.assets import process_assets
 from builder.docx_renderer import _set_font
 from docx import Document
 from docx.oxml.ns import qn
@@ -84,6 +85,40 @@ def test_word_heading_font_does_not_keep_theme_reference() -> None:
     assert fonts.get(qn("w:cs")) == "Times New Roman"
     assert fonts.get(qn("w:asciiTheme")) is None
     assert fonts.get(qn("w:hAnsiTheme")) is None
+
+
+def test_asset_processor_numbers_csv_figure_equation_and_references(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "data.csv").write_text("Показатель,Значение\nТочность,0.93\n", encoding="utf-8")
+    (assets / "scheme.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf-8")
+    markdown = """# Глава 1
+
+См. {{ref:table:data}}, {{ref:figure:scheme}} и {{ref:equation:score}}.
+
+```table
+source: assets/data.csv
+id: data
+caption: Результаты
+```
+
+```figure
+source: assets/scheme.svg
+id: scheme
+caption: Схема
+```
+
+```equation
+id: score
+latex: Q = A + B
+```
+"""
+    result = process_assets(markdown, tmp_path)
+    assert "таблица 1.1, рисунок 1.1 и (1.1)" in result
+    assert "Таблица 1.1 – Результаты" in result
+    assert "| Показатель | Значение |" in result
+    assert "![Рисунок 1.1 – Схема]" in result
+    assert "Q = A + B \\qquad (1.1)" in result
 
 
 def test_scaffold_creates_nested_obsidian_structure_and_is_idempotent(tmp_path: Path) -> None:
