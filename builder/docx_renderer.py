@@ -94,6 +94,33 @@ def _set_repeatable_styles(document: Document, styles: dict) -> None:
         style.paragraph_format.space_before = Pt(0)
         style.paragraph_format.space_after = Pt(6 if name == "TOC Heading" else 0)
 
+    if "Bibliography" in document.styles:
+        bibliography = document.styles["Bibliography"]
+        _set_font(bibliography, body["font"]["family"], body["font"]["size"])
+        bibliography.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        bibliography.paragraph_format.line_spacing = float(body["line_spacing"])
+        bibliography.paragraph_format.left_indent = Mm(12.5)
+        bibliography.paragraph_format.first_line_indent = Mm(-12.5)
+        bibliography.paragraph_format.space_before = Pt(0)
+        bibliography.paragraph_format.space_after = Pt(0)
+        ppr = bibliography.element.get_or_add_pPr()
+        tabs = ppr.find(qn("w:tabs"))
+        if tabs is not None:
+            ppr.remove(tabs)
+        tabs = OxmlElement("w:tabs")
+        tab = OxmlElement("w:tab")
+        tab.set(qn("w:val"), "left")
+        tab.set(qn("w:pos"), str(int(Mm(12.5).twips)))
+        tabs.append(tab)
+        ppr.append(tabs)
+
+    for name in ("Hyperlink", "FollowedHyperlink"):
+        if name not in document.styles:
+            continue
+        hyperlink = document.styles[name]
+        hyperlink.font.color.rgb = RGBColor(0, 0, 0)
+        hyperlink.font.underline = False
+
 
 def _add_page_number(paragraph) -> None:
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -388,13 +415,20 @@ def _request_field_updates(document: Document) -> None:
     update.set(qn("w:val"), "true")
 
 
-def render_docx(project_root: Path, markdown_path: Path, output_path: Path) -> Path:
+def render_docx(
+    project_root: Path,
+    markdown_path: Path,
+    output_path: Path,
+    *,
+    bibliography: Path | None = None,
+    csl: Path | None = None,
+    bibliography_title: str = "СПИСОК ЛИТЕРАТУРЫ",
+) -> Path:
     pandoc = shutil.which("pandoc")
     if pandoc is None:
         raise RuntimeError("Pandoc is required for the DOCX math backend")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
+    command = [
             pandoc,
             str(markdown_path),
             "--from=markdown+tex_math_dollars",
@@ -403,9 +437,21 @@ def render_docx(project_root: Path, markdown_path: Path, output_path: Path) -> P
             "--toc-depth=3",
             "--metadata=lang:ru-RU",
             "--metadata=toc-title:ОГЛАВЛЕНИЕ",
-            "--output",
-            str(output_path),
-        ],
+    ]
+    if bibliography is not None:
+        command.extend(
+            [
+                "--citeproc",
+                "--bibliography",
+                str(bibliography),
+                f"--metadata=reference-section-title:{bibliography_title}",
+            ]
+        )
+    if csl is not None:
+        command.extend(["--csl", str(csl)])
+    command.extend(["--output", str(output_path)])
+    subprocess.run(
+        command,
         cwd=project_root,
         check=True,
     )

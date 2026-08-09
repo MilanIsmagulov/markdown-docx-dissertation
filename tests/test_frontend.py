@@ -10,6 +10,7 @@ from builder.validator import validate_index
 from builder.assembler import assemble_note
 from builder.assets import process_assets
 from builder.docx_renderer import _set_font
+from builder.config import load_document_config
 from docx import Document
 from docx.oxml.ns import qn
 
@@ -19,6 +20,28 @@ def write_note(root: Path, relative: str, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def test_document_config_resolves_bibliography_and_csl(tmp_path: Path) -> None:
+    (tmp_path / "config").mkdir()
+    (tmp_path / "bibliography").mkdir()
+    (tmp_path / "assets" / "csl").mkdir(parents=True)
+    (tmp_path / "bibliography" / "library.bib").write_text("", encoding="utf-8")
+    (tmp_path / "assets" / "csl" / "gost.csl").write_text("<style/>", encoding="utf-8")
+    (tmp_path / "config" / "document.yaml").write_text(
+        """document:
+  bibliography: bibliography/library.bib
+  csl: assets/csl/gost.csl
+  bibliography_title: СПИСОК ИСТОЧНИКОВ
+""",
+        encoding="utf-8",
+    )
+
+    config = load_document_config(tmp_path)
+
+    assert config.bibliography == tmp_path / "bibliography" / "library.bib"
+    assert config.csl == tmp_path / "assets" / "csl" / "gost.csl"
+    assert config.bibliography_title == "СПИСОК ИСТОЧНИКОВ"
 
 
 def test_parser_reads_metadata_links_and_transclusions(tmp_path: Path) -> None:

@@ -13,6 +13,9 @@ class DocumentConfig:
     root_note: Path
     output: Path
     assembled_markdown: Path
+    bibliography: Path | None
+    csl: Path | None
+    bibliography_title: str
 
 
 def load_document_config(project_root: Path) -> DocumentConfig:
@@ -30,5 +33,22 @@ def load_document_config(project_root: Path) -> DocumentConfig:
     root_note = project_root / str(document.get("root", "content/root.md"))
     output = project_root / str(document.get("output", "build/dissertation.docx"))
     assembled_markdown = project_root / str(document.get("assembled_markdown", "build/assembled.md"))
-    return DocumentConfig(project_root, content_dir, root_note, output, assembled_markdown)
-
+    bibliography_value = document.get("bibliography")
+    csl_value = document.get("csl")
+    bibliography = project_root / str(bibliography_value) if bibliography_value else None
+    csl = project_root / str(csl_value) if csl_value else None
+    bibliography_title = str(document.get("bibliography_title", "СПИСОК ЛИТЕРАТУРЫ"))
+    if bibliography is not None and not bibliography.is_file():
+        raise ValueError(f"bibliography file does not exist: {bibliography}")
+    if csl is not None and not csl.is_file():
+        raise ValueError(f"CSL file does not exist: {csl}")
+    return DocumentConfig(
+        project_root,
+        content_dir,
+        root_note,
+        output,
+        assembled_markdown,
+        bibliography,
+        csl,
+        bibliography_title,
+    )

@@ -66,7 +66,14 @@ def build(project_root: Path) -> int:
         return assembled
     config = load_document_config(project_root)
     try:
-        output = render_docx(project_root, config.assembled_markdown, config.output)
+        output = render_docx(
+            project_root,
+            config.assembled_markdown,
+            config.output,
+            bibliography=config.bibliography,
+            csl=config.csl,
+            bibliography_title=config.bibliography_title,
+        )
     except (RuntimeError, subprocess.CalledProcessError, ValueError) as exc:
         print(f"ERROR E_RENDER: {exc}")
         return 1

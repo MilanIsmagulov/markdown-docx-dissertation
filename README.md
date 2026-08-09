@@ -104,3 +104,20 @@ Objects are numbered independently within each chapter. Use
 For Russian grammatical cases, insert only the number and write the surrounding
 phrase explicitly: `на рисунке {{number:figure:pipeline}}` or
 `в таблице {{number:table:results}}`.
+
+## Bibliography
+
+Bibliographic records are stored in `bibliography/bibliography.bib`. Cite them
+from any Markdown note with Pandoc citation keys:
+
+```markdown
+Метод описан в работе [@vaswani2017attention].
+Сравнение подходов приведено в нескольких источниках
+[@baltrusaitis2019multimodal; @radford2022whisper].
+```
+
+The build runs Pandoc Citeproc with the numeric GOST CSL style configured in
+`config/document.yaml`. Only cited records are included in the automatically
+generated `СПИСОК ЛИТЕРАТУРЫ` section. Keep BibTeX keys stable when editing or
+exporting the library from Zotero. Obsidian's Citations plugin can use the same
+`.bib` file for searching and inserting keys.
