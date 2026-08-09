@@ -112,7 +112,7 @@ def process_assets(markdown: str, content_dir: Path) -> str:
             latex = str(config.get("latex", "")).strip()
             if not latex:
                 raise ValueError("equation directive requires latex")
-            output.extend(("$$", f"{latex} \\qquad ({number})", "$$", ""))
+            output.extend((f"[[EQUATION:{number}]]", "", "$$", latex, "$$", ""))
 
     assembled = "\n".join(output)
 

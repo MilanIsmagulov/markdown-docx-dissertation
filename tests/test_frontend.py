@@ -118,7 +118,8 @@ latex: Q = A + B
     assert "Таблица 1.1 – Результаты" in result
     assert "| Показатель | Значение |" in result
     assert "![Рисунок 1.1 – Схема]" in result
-    assert "Q = A + B \\qquad (1.1)" in result
+    assert "[[EQUATION:1.1]]" in result
+    assert "$$\nQ = A + B\n$$" in result
 
 
 def test_scaffold_creates_nested_obsidian_structure_and_is_idempotent(tmp_path: Path) -> None:
