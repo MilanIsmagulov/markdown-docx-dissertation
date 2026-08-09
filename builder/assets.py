@@ -154,18 +154,40 @@ def process_assets(markdown: str, content_dir: Path) -> str:
             if not source.is_file():
                 raise ValueError(f"table asset not found: {source}")
             rows = _read_rows(source, str(config["sheet"]) if config.get("sheet") else None)
-            output.extend((f"Таблица {number} – {caption}", "", _markdown_table(rows), ""))
+            output.extend(
+                (
+                    f"Таблица [[TARGET:{kind}:{object_id}:{chapter}:{counters[kind]}]] – {caption}",
+                    "",
+                    _markdown_table(rows),
+                    "",
+                )
+            )
         elif kind == "figure":
             source = content_dir / str(config.get("source", ""))
             if not source.is_file():
                 raise ValueError(f"figure asset not found: {source}")
             width = str(config.get("width", "140mm"))
-            output.extend((f"![Рисунок {number} – {caption}](<{source.as_posix()}>){{width={width}}}", ""))
+            output.extend(
+                (
+                    f"![Рисунок [[TARGET:{kind}:{object_id}:{chapter}:{counters[kind]}]] – {caption}]"
+                    f"(<{source.as_posix()}>){{width={width}}}",
+                    "",
+                )
+            )
         else:
             latex = str(config.get("latex", "")).strip()
             if not latex:
                 raise ValueError("equation directive requires latex")
-            output.extend((f"[[EQUATION:{number}]]", "", "$$", latex, "$$", ""))
+            output.extend(
+                (
+                    f"[[EQUATION:{object_id}:{chapter}:{counters[kind]}]]",
+                    "",
+                    "$$",
+                    latex,
+                    "$$",
+                    "",
+                )
+            )
 
     assembled = "\n".join(output)
 
@@ -173,12 +195,7 @@ def process_assets(markdown: str, content_dir: Path) -> str:
         key = (match["kind"], match["id"])
         if key not in labels:
             raise ValueError(f"unknown {match['kind']} reference: {match['id']}")
-        number = labels[key].number
-        return {
-            "table": f"таблица {number}",
-            "figure": f"рисунок {number}",
-            "equation": f"({number})",
-        }[match["kind"]]
+        return f"[[REF:{match['kind']}:{match['id']}:{labels[key].number}]]"
 
     assembled = REFERENCE_RE.sub(replace_reference, assembled)
 
@@ -186,6 +203,6 @@ def process_assets(markdown: str, content_dir: Path) -> str:
         key = (match["kind"], match["id"])
         if key not in labels:
             raise ValueError(f"unknown {match['kind']} reference: {match['id']}")
-        return labels[key].number
+        return f"[[NUMBER:{match['kind']}:{match['id']}:{labels[key].number}]]"
 
     return NUMBER_RE.sub(replace_number, assembled).strip() + "\n"

@@ -3,6 +3,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 import re
+import hashlib
+from copy import deepcopy
 from pathlib import Path
 
 import yaml
@@ -142,6 +144,153 @@ def _add_page_number(paragraph) -> None:
     run._r.extend((begin, instruction, end))
 
 
+TARGET_RE = re.compile(
+    r"\[\[TARGET:(?P<kind>table|figure|equation):(?P<id>[A-Za-z0-9_.-]+):"
+    r"(?P<chapter>\d+):(?P<ordinal>\d+)]]"
+)
+REFERENCE_FIELD_RE = re.compile(
+    r"\[\[(?P<form>REF|NUMBER):(?P<kind>table|figure|equation):"
+    r"(?P<id>[A-Za-z0-9_.-]+):(?P<number>\d+(?:\.\d+)*)]]"
+)
+
+
+def _bookmark_name(kind: str, object_id: str) -> str:
+    digest = hashlib.sha1(f"{kind}:{object_id}".encode("utf-8")).hexdigest()[:16]
+    return f"md_{kind[:3]}_{digest}"
+
+
+def _field_run(instruction: str, display: str, rpr=None) -> OxmlElement:
+    run = OxmlElement("w:r")
+    if rpr is not None:
+        run.append(deepcopy(rpr))
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    begin.set(qn("w:dirty"), "true")
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = f" {instruction} "
+    separate = OxmlElement("w:fldChar")
+    separate.set(qn("w:fldCharType"), "separate")
+    text = OxmlElement("w:t")
+    text.text = display
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    run.extend((begin, instr, separate, text, end))
+    return run
+
+
+def _text_run(text: str, rpr=None) -> OxmlElement:
+    run = OxmlElement("w:r")
+    if rpr is not None:
+        run.append(deepcopy(rpr))
+    node = OxmlElement("w:t")
+    if text[:1].isspace() or text[-1:].isspace():
+        node.set(qn("xml:space"), "preserve")
+    node.text = text
+    run.append(node)
+    return run
+
+
+def _replace_markers_in_runs(paragraph, pattern: re.Pattern, replacement) -> int:
+    replacements = 0
+    for run in list(paragraph.runs):
+        text = run.text
+        matches = list(pattern.finditer(text))
+        if not matches:
+            continue
+        parent = run._r.getparent()
+        position = parent.index(run._r)
+        rpr = run._r.find(qn("w:rPr"))
+        nodes: list[OxmlElement] = []
+        cursor = 0
+        for match in matches:
+            if match.start() > cursor:
+                nodes.append(_text_run(text[cursor : match.start()], rpr))
+            nodes.extend(replacement(match, rpr))
+            cursor = match.end()
+            replacements += 1
+        if cursor < len(text):
+            nodes.append(_text_run(text[cursor:], rpr))
+        parent.remove(run._r)
+        for offset, node in enumerate(nodes):
+            parent.insert(position + offset, node)
+    return replacements
+
+
+def _sequence_nodes(match: re.Match, rpr, bookmark_id: int) -> list[OxmlElement]:
+    kind = match["kind"]
+    chapter = int(match["chapter"])
+    ordinal = int(match["ordinal"])
+    label = {"table": "Table", "figure": "Figure", "equation": "Equation"}[kind]
+    bookmark = _bookmark_name(kind, match["id"])
+    start = OxmlElement("w:bookmarkStart")
+    start.set(qn("w:id"), str(bookmark_id))
+    start.set(qn("w:name"), bookmark)
+    end = OxmlElement("w:bookmarkEnd")
+    end.set(qn("w:id"), str(bookmark_id))
+    nodes = [start]
+    if chapter:
+        nodes.append(_text_run(f"{chapter}.", rpr))
+    sequence_name = f"Md{label}Chapter{chapter}"
+    nodes.append(_field_run(f"SEQ {sequence_name} \\* ARABIC", str(ordinal), rpr))
+    nodes.append(end)
+    return nodes
+
+
+def _install_cross_reference_fields(document: Document) -> None:
+    bookmark_id = 1000
+    targets: set[tuple[str, str]] = set()
+
+    for paragraph in document.paragraphs:
+        def replace_target(match: re.Match, rpr):
+            nonlocal bookmark_id
+            key = (match["kind"], match["id"])
+            if key in targets:
+                raise ValueError(f"duplicate cross-reference target: {match['kind']}:{match['id']}")
+            targets.add(key)
+            nodes = _sequence_nodes(match, rpr, bookmark_id)
+            bookmark_id += 1
+            return nodes
+
+        _replace_markers_in_runs(paragraph, TARGET_RE, replace_target)
+
+    for paragraph in document.paragraphs:
+        def replace_reference(match: re.Match, rpr):
+            key = (match["kind"], match["id"])
+            if key not in targets:
+                raise ValueError(f"unknown cross-reference target: {match['kind']}:{match['id']}")
+            kind = match["kind"]
+            bookmark = _bookmark_name(kind, match["id"])
+            display_number = match["number"]
+            prefix = ""
+            suffix = ""
+            if match["form"] == "REF":
+                prefix, suffix = {
+                    "table": ("таблица ", ""),
+                    "figure": ("рисунок ", ""),
+                    "equation": ("(", ")"),
+                }[kind]
+            nodes: list[OxmlElement] = []
+            if prefix:
+                nodes.append(_text_run(prefix, rpr))
+            nodes.append(_field_run(f"REF {bookmark} \\h", display_number, rpr))
+            if suffix:
+                nodes.append(_text_run(suffix, rpr))
+            return nodes
+
+        _replace_markers_in_runs(paragraph, REFERENCE_FIELD_RE, replace_reference)
+
+    # Pandoc also copies a figure caption into wp:docPr/@descr as image alt
+    # text. Keep the accessibility description readable and free of compiler
+    # markers even though the visible caption has already become a SEQ field.
+    for node in document._element.xpath(".//*[@descr]"):
+        description = node.get("descr", "")
+        node.set(
+            "descr",
+            TARGET_RE.sub(lambda match: f"{match['chapter']}.{match['ordinal']}", description),
+        )
+
+
 def _format_numbered_objects(document: Document, styles: dict) -> None:
     family = styles["body"]["font"]["family"]
     for paragraph in document.paragraphs:
@@ -212,7 +361,9 @@ def _format_numbered_objects(document: Document, styles: dict) -> None:
 
 
 def _format_numbered_equations(document: Document, styles: dict) -> None:
-    marker_pattern = re.compile(r"^\[\[EQUATION:(?P<number>\d+(?:\.\d+)*)]]$")
+    marker_pattern = re.compile(
+        r"^\[\[EQUATION:(?P<id>[A-Za-z0-9_.-]+):(?P<chapter>\d+):(?P<ordinal>\d+)]]$"
+    )
     family = styles["body"]["font"]["family"]
     usable_width_mm = 210 - _number(styles["document"]["margins"]["left"], "mm") - _number(
         styles["document"]["margins"]["right"], "mm"
@@ -262,7 +413,9 @@ def _format_numbered_equations(document: Document, styles: dict) -> None:
         formula.add_run("\t")
         formula._p.append(math)
         formula.add_run("\t")
-        number_run = formula.add_run(f"({match['number']})")
+        number_run = formula.add_run(
+            f"([[TARGET:equation:{match['id']}:{match['chapter']}:{match['ordinal']}]])"
+        )
         number_run.font.name = family
         number_run.font.size = Pt(14)
         marker._element.getparent().remove(marker._element)
@@ -517,6 +670,7 @@ def render_docx(
     _request_field_updates(document)
     _format_numbered_objects(document, styles)
     _format_numbered_equations(document, styles)
+    _install_cross_reference_fields(document)
     _format_pdf_page_breaks(document)
     for paragraph in document.paragraphs:
         if paragraph._p.xpath(".//m:oMathPara"):

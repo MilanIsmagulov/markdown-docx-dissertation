@@ -10,7 +10,7 @@ from builder.validator import validate_index
 from builder.assembler import assemble_note
 from builder.assets import process_assets
 from builder import assets as assets_module
-from builder.docx_renderer import _set_font
+from builder.docx_renderer import _install_cross_reference_fields, _set_font
 from builder.config import load_document_config
 from docx import Document
 from docx.oxml.ns import qn
@@ -111,6 +111,22 @@ def test_word_heading_font_does_not_keep_theme_reference() -> None:
     assert fonts.get(qn("w:hAnsiTheme")) is None
 
 
+def test_word_cross_references_use_seq_ref_fields_and_bookmarks() -> None:
+    document = Document()
+    document.add_paragraph("См. [[REF:equation:quality:1.1]].")
+    document.add_paragraph("([[TARGET:equation:quality:1:1]])")
+
+    _install_cross_reference_fields(document)
+
+    xml = document._element.xml
+    assert "SEQ MdEquationChapter1" in xml
+    assert "REF md_equ_" in xml
+    assert "w:bookmarkStart" in xml
+    assert "w:bookmarkEnd" in xml
+    assert "[[REF:" not in xml
+    assert "[[TARGET:" not in xml
+
+
 def test_asset_processor_numbers_csv_figure_equation_and_references(tmp_path: Path) -> None:
     assets = tmp_path / "assets"
     assets.mkdir()
@@ -142,11 +158,11 @@ latex: Q = A + B
 ```
 """
     result = process_assets(markdown, tmp_path)
-    assert "таблица 1.1, рисунок 1.1 и (1.1)" in result
-    assert "Таблица 1.1 – Результаты" in result
+    assert "[[REF:table:data:1.1]], [[REF:figure:scheme:1.1]] и [[REF:equation:score:1.1]]" in result
+    assert "Таблица [[TARGET:table:data:1:1]] – Результаты" in result
     assert "| Показатель | Значение |" in result
-    assert "![Рисунок 1.1 – Схема]" in result
-    assert "[[EQUATION:1.1]]" in result
+    assert "![Рисунок [[TARGET:figure:scheme:1:1]] – Схема]" in result
+    assert "[[EQUATION:score:1:1]]" in result
     assert "$$\nQ = A + B\n$$" in result
 
 
