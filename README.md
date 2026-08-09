@@ -1,7 +1,11 @@
-# Markdown -> DOCX dissertation compiler
+# Markdown → DOCX dissertation compiler
 
-The project currently implements the validation front-end of a graph-aware
-Markdown compiler.
+Компилятор диссертации из связанных Markdown-заметок в оформленный DOCX.
+Markdown остаётся источником текста, YAML хранит метаданные и правила
+оформления, BibTeX — библиографию, а Obsidian используется как редактор и для
+просмотра графа документа.
+
+## Быстрый старт
 
 ```powershell
 python -m pip install -e ".[dev]"
@@ -12,42 +16,65 @@ python build.py build
 pytest
 ```
 
-## Генерация структуры диссертации
+Основные команды:
 
-Параметры структуры находятся в секции `structure` файла
-`config/metadata.yaml`. По умолчанию создаются четыре главы и по четыре
-параграфа в каждой. Команда `python build.py scaffold` создаёт:
+- `scaffold` создаёт недостающую структуру диссертации;
+- `validate` проверяет граф заметок, ссылки и подключаемые файлы;
+- `assemble` раскрывает вложения в `build/assembled.md`;
+- `build` выполняет полный цикл и создаёт DOCX по пути из
+  `config/document.yaml`.
 
-- общий `content/root.md` со ссылками на файлы глав;
-- файл каждой главы со ссылками на её преамбулу, параграфы и выводы;
-- отдельную преамбулу с текстом сразу под заголовком главы;
-- отдельные Markdown-файлы параграфов;
-- отдельный файл «Выводы по главе».
-- каталог `00 Front Matter` с файлом `Введение.md` и отдельными смысловыми
-  блоками введения;
-- отдельный файл `90 Back Matter/Заключение.md`.
+Для сборки нужны Pandoc, а для PDF-приложений — Poppler. Настройки документа,
+выходного файла, библиографии и CSL находятся в `config/document.yaml`;
+сведения для титульного листа и структура глав — в `config/metadata.yaml`;
+параметры оформления — в `config/styles.yaml`.
 
-Команду можно запускать повторно. Генератор обновляет только блоки ссылок между
-файлами и создаёт отсутствующие заметки; существующий текст заметок не
-перезаписывается. Все ссылки имеют нативный для Obsidian вид `![[...]]`.
+## Реализованные возможности
 
-The entry document is configured in `config/document.yaml`. Markdown notes may
-use YAML front matter, `[[wiki links]]`, and `![[transclusions#Heading]]`.
+1. Графовая структура документа на основе `[[wiki-ссылок]]` и
+   `![[трансклюзий]]`, включая вложение конкретного заголовка заметки.
+2. Проверка дублирующихся идентификаторов, неоднозначных и отсутствующих
+   ссылок до сборки.
+3. Автоматическое создание четырёх глав и четырёх параграфов в каждой по
+   умолчанию, а также преамбул, выводов по главам, введения, заключения,
+   библиографии и приложений.
+4. Автоматический титульный лист из YAML-метаданных без номера страницы.
+5. Автоматическое оглавление Word с заголовками первого и второго уровней и
+   без абзацного отступа у его строк.
+6. Стили Word с Times New Roman, полями, интервалами и абзацами из YAML.
+7. Редактируемые формулы Office Math, нумеруемые в пределах главы.
+8. Таблицы из CSV, TSV и XLSX и рисунки из PNG/JPEG с подписями и нумерацией.
+9. Ссылки на формулы, таблицы и рисунки по устойчивым идентификаторам.
+10. Библиография из BibTeX по числовому CSL-стилю ГОСТ.
+11. PDF-приложения, автоматически преобразуемые в страницы DOCX.
+12. Совместимость исходников с Obsidian и его графом заметок.
 
-## Obsidian and equations
+## Структура диссертации
 
-Open `content/` as the Obsidian vault. Its local `.obsidian/app.json` selects
-Wikilinks and **Absolute path in vault**, so links such as
-`[[01 Chapter/1.2. Параграф]]` are always rooted at `content/`
-and do not depend on the current note folder. The `_templates/` directory
-contains templates for a paragraph, chapter preamble, and chapter conclusions.
-Enable the core **Templates** plugin and insert the appropriate template after
-creating a note. The built-in plugin can substitute `{{title}}`, but the numeric
-part of `id` must be entered manually; `python build.py scaffold` remains the
-fully automatic way to create a numbered structure.
+Параметры секции `structure` в `config/metadata.yaml` задают число глав,
+параграфов и приложений. По умолчанию создаются четыре главы и по четыре
+параграфа:
 
-The compiler syntax deliberately remains valid Obsidian Markdown. An equation
-note can contain ordinary MathJax syntax:
+```text
+Глава 1 → преамбула → 1.1 → 1.2 → 1.3 → 1.4 → выводы
+Глава 2 → преамбула → 2.1 → 2.2 → 2.3 → 2.4 → выводы
+...
+```
+
+`python build.py scaffold` создаёт отсутствующие заметки и обновляет только
+служебные блоки ссылок. Уже написанный текст не перезаписывается. Общий файл
+`content/root.md` подключает структурные разделы, главы, заключение, список
+литературы и приложения. Файл главы, в свою очередь, подключает её преамбулу,
+параграфы и выводы.
+
+## Obsidian и формулы
+
+Откройте `content/` как Obsidian vault. Локальная конфигурация использует
+Wikilinks и абсолютные пути внутри vault, поэтому ссылка
+`[[01 Chapter/1.2. Параграф]]` разрешается от каталога `content/`, независимо
+от расположения текущей заметки.
+
+Для предварительного просмотра формулу можно хранить в отдельной заметке:
 
 ```markdown
 ---
@@ -60,40 +87,9 @@ L(\theta) = -\sum_i y_i \log p_i
 $$
 ```
 
-Save it as `content/equations/loss.md` and embed it with
-`![[equations/loss]]`. Obsidian resolves wiki links by note path/name (not by
-the YAML `id`) and renders the embedded formula. The stable `id` remains
-available to the compiler for semantic references. Then `python build.py
-assemble` writes the expanded formula to `build/assembled.md`.
-The future DOCX backend will render the same semantic equation as OMML.
-
-## Numbered tables, figures, and equations
-
-Markdown does not natively render an XLSX workbook. Keep source data in
-`content/assets/tables/` as CSV, TSV, or XLSX and insert it with a fenced
-directive. XLSX directives may select a worksheet with `sheet`:
-
-````markdown
-```table
-source: assets/tables/results.xlsx
-sheet: Experiment
-id: results
-caption: Results of the experiment
-```
-````
-
-Figures use PNG or JPEG assets from `content/assets/images/`:
-
-````markdown
-```figure
-source: assets/images/pipeline.png
-id: pipeline
-caption: Multimodal processing pipeline
-width: 150mm
-```
-````
-
-Numbered editable equations use LaTeX source:
+Вставка `![[equations/loss]]` показывает формулу в Obsidian и переносит её в
+собранный Markdown. Для нумеруемой редактируемой формулы DOCX используйте
+директиву:
 
 ````markdown
 ```equation
@@ -102,40 +98,88 @@ latex: Q = \alpha A + \beta C
 ```
 ````
 
-Objects are numbered independently within each chapter. Use
-`{{ref:equation:quality}}` for a complete equation reference such as `(1.1)`.
-For Russian grammatical cases, insert only the number and write the surrounding
-phrase explicitly: `на рисунке {{number:figure:pipeline}}` or
+В DOCX формула выравнивается по центру, а номер — по правому краю посредством
+табуляции, без использования невидимой таблицы.
+
+## Таблицы, рисунки и ссылки
+
+Исходные данные таблиц хранятся в `content/assets/tables/`:
+
+````markdown
+```table
+source: assets/tables/results.xlsx
+sheet: Experiment
+id: results
+caption: Сравнение моделей
+```
+````
+
+Поддерживаются CSV, TSV и XLSX. Для XLSX можно выбрать лист параметром
+`sheet`. Рисунки PNG/JPEG хранятся в `content/assets/images/`:
+
+````markdown
+```figure
+source: assets/images/pipeline.png
+id: pipeline
+caption: Мультимодальный конвейер обработки
+width: 150mm
+```
+````
+
+Объекты нумеруются независимо внутри каждой главы. Полная ссылка на формулу:
+`{{ref:equation:quality}}`. Для согласования с русскими падежами вставляйте
+только номер: `на рисунке {{number:figure:pipeline}}` или
 `в таблице {{number:table:results}}`.
 
-## Bibliography
+## Библиография
 
-Bibliographic records are stored in `bibliography/bibliography.bib`. Cite them
-from any Markdown note with Pandoc citation keys:
+Записи хранятся в `bibliography/bibliography.bib`, а ссылки вставляются в
+синтаксисе Pandoc:
 
 ```markdown
 Метод описан в работе [@vaswani2017attention].
-Сравнение подходов приведено в нескольких источниках
-[@baltrusaitis2019multimodal; @radford2022whisper].
+Несколько работ рассматривают эту проблему
+[@source4; @source5; @source6; @source7].
 ```
 
-The build runs Pandoc Citeproc with the numeric GOST CSL style configured in
-`config/document.yaml`. Only cited records are included in the automatically
-generated `СПИСОК ЛИТЕРАТУРЫ` section. Keep BibTeX keys stable when editing or
-exporting the library from Zotero. Obsidian's Citations plugin can use the same
-`.bib` file for searching and inserting keys.
+В список литературы попадают только процитированные записи. Подключённый CSL
+сортирует числовую группу и сворачивает три и более последовательных номера:
+`[4–7]`. Несмежные номера оформляются, например, как `[4,6–8,11]`. Для
+устойчивости ссылок не изменяйте BibTeX-ключи после их использования в тексте.
 
-## PDF appendices
+## PDF-приложения
 
-Appendices are assembled through `content/99 Appendices/Приложения.md`. A PDF
-kept under `content/assets/appendices/` can be embedded with the same syntax
-that Obsidian uses for its native PDF viewer:
+Приложения подключаются через `content/99 Appendices/Приложения.md`. PDF-файл
+помещается в `content/assets/appendices/` и вставляется нативным для Obsidian
+синтаксисом:
 
 ```markdown
 ![[assets/appendices/implementation-act.pdf]]
 ```
 
-During DOCX assembly, Poppler renders every PDF page at 200 DPI. Pages are
-inserted at 160 mm width, and every page after the first starts on a new Word
-page. To insert only one page, use `![[assets/appendices/file.pdf#page=2]]`.
-The validator reports missing PDF assets before the build starts.
+При сборке каждая страница PDF визуализируется с разрешением 200 DPI и
+вставляется в DOCX с шириной 160 мм. Начиная со второй, страницы отделяются
+разрывами. Отдельная страница подключается как
+`![[assets/appendices/file.pdf#page=2]]`. Отсутствующий файл обнаруживается на
+этапе проверки.
+
+## План развития
+
+Функции реализуются и документируются последовательно:
+
+1. Динамические поля Word `SEQ/REF` и закладки для перекрёстных ссылок на
+   формулы, рисунки, таблицы и приложения.
+2. Автоматические перечни таблиц и рисунков.
+3. Расширенные таблицы: объединение ячеек, повтор заголовка, продолжение и
+   примечания.
+4. Сноски и концевые примечания из Markdown.
+5. Расширенные приложения: Markdown-приложения, несколько PDF и управление их
+   подписями и нумерацией.
+6. Усиленная предполётная проверка: отсутствующие ключи BibTeX, повторяющиеся
+   идентификаторы объектов и неиспользуемые ресурсы.
+7. Режимы черновой и финальной сборки и автоматическая визуальная проверка.
+8. Автореферат на основе общих метаданных и материалов диссертации.
+9. Презентация по структуре и результатам работы.
+
+После реализации каждого пункта его описание и пример синтаксиса переносятся
+из этого плана в раздел «Реализованные возможности».
