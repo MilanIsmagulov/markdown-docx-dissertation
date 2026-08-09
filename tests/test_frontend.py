@@ -12,6 +12,7 @@ from builder.assets import process_assets
 from builder import assets as assets_module
 from builder.docx_renderer import _install_cross_reference_fields, _set_font
 from builder.config import load_document_config
+from builder.cli import archive_previous_versions, next_versioned_output
 from docx import Document
 from docx.oxml.ns import qn
 
@@ -43,6 +44,24 @@ def test_document_config_resolves_bibliography_and_csl(tmp_path: Path) -> None:
     assert config.bibliography == tmp_path / "bibliography" / "library.bib"
     assert config.csl == tmp_path / "assets" / "csl" / "gost.csl"
     assert config.bibliography_title == "СПИСОК ИСТОЧНИКОВ"
+
+
+def test_build_output_is_versioned_and_previous_versions_are_archived(tmp_path: Path) -> None:
+    build = tmp_path / "build"
+    old = build / ".old"
+    old.mkdir(parents=True)
+    (build / "dissertation-v10.docx").write_bytes(b"ten")
+    (old / "dissertation-v11.docx").write_bytes(b"eleven")
+
+    output = next_versioned_output(build / "dissertation-v10.docx")
+    assert output.name == "dissertation-v12.docx"
+    output.write_bytes(b"twelve")
+
+    archived = archive_previous_versions(output)
+    assert [path.name for path in archived] == ["dissertation-v10.docx"]
+    assert not (build / "dissertation-v10.docx").exists()
+    assert (old / "dissertation-v10.docx").read_bytes() == b"ten"
+    assert output.read_bytes() == b"twelve"
 
 
 def test_parser_reads_metadata_links_and_transclusions(tmp_path: Path) -> None:

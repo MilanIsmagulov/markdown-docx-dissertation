@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 from pathlib import Path
 
@@ -13,6 +14,47 @@ from .docx_renderer import render_docx
 from .resolver import build_index
 from .scaffold import scaffold
 from .validator import validate_index
+
+
+VERSIONED_DOCX_RE = re.compile(r"^(?P<base>.+?)(?:-v(?P<version>\d+))?\.docx$", re.IGNORECASE)
+
+
+def next_versioned_output(configured_output: Path) -> Path:
+    match = VERSIONED_DOCX_RE.match(configured_output.name)
+    if match is None:
+        raise ValueError(f"output must be a DOCX file: {configured_output}")
+    base = match["base"]
+    versions = [int(match["version"] or 0)]
+    for directory in (configured_output.parent, configured_output.parent / ".old"):
+        if not directory.is_dir():
+            continue
+        for candidate in directory.glob(f"{base}-v*.docx"):
+            candidate_match = VERSIONED_DOCX_RE.match(candidate.name)
+            if candidate_match and candidate_match["base"].casefold() == base.casefold():
+                versions.append(int(candidate_match["version"] or 0))
+    return configured_output.with_name(f"{base}-v{max(versions) + 1}.docx")
+
+
+def archive_previous_versions(current_output: Path) -> list[Path]:
+    match = VERSIONED_DOCX_RE.match(current_output.name)
+    if match is None:
+        return []
+    base = match["base"]
+    archive = current_output.parent / ".old"
+    archived: list[Path] = []
+    candidates = sorted(current_output.parent.glob(f"{base}-v*.docx"))
+    for candidate in candidates:
+        if candidate == current_output:
+            continue
+        archive.mkdir(parents=True, exist_ok=True)
+        destination = archive / candidate.name
+        try:
+            candidate.replace(destination)
+        except OSError as exc:
+            print(f"WARNING W_ARCHIVE_LOCKED: could not archive {candidate.name}: {exc}")
+            continue
+        archived.append(destination)
+    return archived
 
 
 def validate(project_root: Path) -> int:
@@ -66,10 +108,11 @@ def build(project_root: Path) -> int:
         return assembled
     config = load_document_config(project_root)
     try:
+        versioned_output = next_versioned_output(config.output)
         output = render_docx(
             project_root,
             config.assembled_markdown,
-            config.output,
+            versioned_output,
             bibliography=config.bibliography,
             csl=config.csl,
             bibliography_title=config.bibliography_title,
@@ -77,7 +120,10 @@ def build(project_root: Path) -> int:
     except (RuntimeError, subprocess.CalledProcessError, ValueError) as exc:
         print(f"ERROR E_RENDER: {exc}")
         return 1
+    archived = archive_previous_versions(output)
     print(f"Built DOCX: {output.relative_to(project_root)}")
+    if archived:
+        print(f"Archived {len(archived)} previous version(s) to {output.parent.name}\\.old")
     return 0
 
 
