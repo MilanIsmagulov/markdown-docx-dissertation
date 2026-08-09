@@ -125,6 +125,9 @@ def test_word_cross_references_use_seq_ref_fields_and_bookmarks() -> None:
     assert "w:bookmarkEnd" in xml
     assert "[[REF:" not in xml
     assert "[[TARGET:" not in xml
+    for field_run in document._element.xpath(".//w:r[w:instrText]"):
+        assert not field_run.xpath("./w:rPr/w:i")
+        assert not field_run.xpath("./w:rPr/w:iCs")
 
 
 def test_asset_processor_numbers_csv_figure_equation_and_references(tmp_path: Path) -> None:

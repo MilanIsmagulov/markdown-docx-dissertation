@@ -123,6 +123,13 @@ def _set_repeatable_styles(document: Document, styles: dict) -> None:
         tabs.append(tab)
         ppr.append(tabs)
 
+    # Pandoc's built-in Image Caption style is italic. A REF field copies the
+    # target formatting, so suppressing italics only on the caption run can be
+    # inverted by Word's toggle-property semantics. Make the style itself
+    # upright and leave target runs free of local italic overrides.
+    if "Image Caption" in document.styles:
+        document.styles["Image Caption"].font.italic = False
+
     for name in ("Hyperlink", "FollowedHyperlink"):
         if name not in document.styles:
             continue
@@ -163,6 +170,12 @@ def _field_run(instruction: str, display: str, rpr=None) -> OxmlElement:
     run = OxmlElement("w:r")
     if rpr is not None:
         run.append(deepcopy(rpr))
+    field_rpr = run.find(qn("w:rPr"))
+    if field_rpr is not None:
+        for tag in ("i", "iCs"):
+            italic = field_rpr.find(qn(f"w:{tag}"))
+            if italic is not None:
+                field_rpr.remove(italic)
     begin = OxmlElement("w:fldChar")
     begin.set(qn("w:fldCharType"), "begin")
     begin.set(qn("w:dirty"), "true")
@@ -310,7 +323,7 @@ def _format_numbered_objects(document: Document, styles: dict) -> None:
         for run in paragraph.runs:
             run.font.name = family
             run.font.size = Pt(14)
-            run.italic = False
+            run.italic = None
 
     usable_width_mm = 210 - _number(styles["document"]["margins"]["left"], "mm") - _number(
         styles["document"]["margins"]["right"], "mm"
