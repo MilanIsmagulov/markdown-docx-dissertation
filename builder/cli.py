@@ -64,7 +64,7 @@ def validate(project_root: Path) -> int:
         print(f"ERROR E_CONFIG: {exc}")
         return 1
     index = build_index(project_root, config.content_dir)
-    diagnostics = validate_index(index, config.root_note, config.bibliography)
+    diagnostics = validate_index(index, config.root_note, config.bibliography, config.publications_bibliography)
     for diagnostic in diagnostics:
         print(diagnostic.format(project_root))
     errors = sum(item.severity == "error" for item in diagnostics)
@@ -80,7 +80,7 @@ def assemble(project_root: Path) -> int:
         print(f"ERROR E_CONFIG: {exc}")
         return 1
     index = build_index(project_root, config.content_dir)
-    diagnostics = validate_index(index, config.root_note, config.bibliography)
+    diagnostics = validate_index(index, config.root_note, config.bibliography, config.publications_bibliography)
     errors = [item for item in diagnostics if item.severity == "error"]
     if errors:
         for diagnostic in diagnostics:
@@ -92,7 +92,12 @@ def assemble(project_root: Path) -> int:
         print(f"ERROR E_ROOT_MISSING: entry document was not indexed: {config.root_note}")
         return 1
     try:
-        output = process_assets(assemble_note(index, root_note), config.content_dir)
+        output = process_assets(
+            assemble_note(index, root_note),
+            config.content_dir,
+            config.bibliography,
+            config.publications_bibliography,
+        )
     except ValueError as exc:
         print(f"ERROR E_ASSET: {exc}")
         return 1
@@ -114,6 +119,7 @@ def build(project_root: Path) -> int:
             config.assembled_markdown,
             versioned_output,
             bibliography=config.bibliography,
+            publications_bibliography=config.publications_bibliography,
             csl=config.csl,
             bibliography_title=config.bibliography_title,
         )

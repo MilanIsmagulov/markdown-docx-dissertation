@@ -5,6 +5,7 @@ document:
   output: build/dissertation-gost-title-v10.docx
   assembled_markdown: build/assembled.md
   bibliography: bibliography/bibliography.bib
+  publications_bibliography: bibliography/publications.bib
   csl: assets/csl/gost-r-7-0-5-2008-numeric.csl
   bibliography_title: СПИСОК ЛИТЕРАТУРЫ
 

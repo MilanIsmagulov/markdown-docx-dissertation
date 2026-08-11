@@ -124,7 +124,8 @@ def scaffold(project_root: Path) -> tuple[int, int]:
         + "# СПИСОК РИСУНКОВ\n\n{{list:figures}}\n\n"
         + "# СПИСОК ТАБЛИЦ\n\n{{list:tables}}\n\n"
         + "# СПИСОК СОКРАЩЕНИЙ\n\n{{list:abbreviations}}\n\n"
-        + "# СПИСОК ОБОЗНАЧЕНИЙ\n\n{{list:symbols}}\n",
+        + "# СПИСОК ОБОЗНАЧЕНИЙ\n\n{{list:symbols}}\n\n"
+        + "# СЛОВАРЬ ТЕРМИНОВ\n\n{{list:glossary}}\n",
     )
 
     for chapter in range(1, structure.chapters + 1):

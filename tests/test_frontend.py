@@ -13,6 +13,7 @@ from builder import assets as assets_module
 from builder.docx_renderer import _install_cross_reference_fields, _set_font
 from builder.config import load_document_config
 from builder.cli import archive_previous_versions, next_versioned_output
+from builder.bibliography import publication_counts, read_bib_entries
 from docx import Document
 from docx.oxml.ns import qn
 
@@ -152,6 +153,7 @@ def test_word_cross_references_use_seq_ref_fields_and_bookmarks() -> None:
 def test_word_object_lists_use_ref_and_pageref_fields() -> None:
     document = Document()
     document.add_paragraph("[[LIST:figure]]")
+    document.add_paragraph("Всего [[STAT:pages]] страниц")
     document.add_paragraph("Рисунок [[TARGET:figure:pipeline:1:1]] – Схема обработки")
 
     _install_cross_reference_fields(document)
@@ -160,6 +162,7 @@ def test_word_object_lists_use_ref_and_pageref_fields() -> None:
     assert "[[LIST:" not in xml
     assert "REF md_fig_" in xml
     assert "PAGEREF md_fig_" in xml
+    assert "NUMPAGES" in xml
     assert "Схема обработки" in xml
 
 
@@ -218,6 +221,31 @@ def test_asset_processor_expands_object_and_term_lists(tmp_path: Path) -> None:
     assert "[[LIST:figure]]" in result
     assert "[[LIST:table]]" in result
     assert "| ИИ | искусственный интеллект |" in result
+
+
+def test_document_and_publication_statistics_are_expanded(tmp_path: Path) -> None:
+    content = tmp_path / "content"
+    content.mkdir()
+    main_bib = tmp_path / "main.bib"
+    main_bib.write_text("@book{one, title={One}, author={A}, year={2026}, publisher={P}}", encoding="utf-8")
+    publications = tmp_path / "publications.bib"
+    publications.write_text(
+        "@article{pub, author={A}, title={T}, journal={J}, year={2026}, keywords={vak, scopus}}\n"
+        "@software{soft, author={A}, title={S}, number={1}, year={2026}, keywords={software-registration}}",
+        encoding="utf-8",
+    )
+    result = process_assets(
+        "# Глава 1\n# ПРИЛОЖЕНИЕ А\n{{stat:pages}}/{{stat:chapters}}/{{stat:appendices}}/"
+        "{{stat:bibliography}}/{{stat:publications}}/{{stat:publications_vak}}/"
+        "{{stat:publications_scopus_wos}}/{{stat:software_registrations}}/{{stat_phrase:figures}}/"
+        "{{stat_phrase:appendices}}",
+        content,
+        main_bib,
+        publications,
+    )
+    assert "[[STAT:pages]]/1/1/1/2/1/1/1/0 рисунков/1 приложение" in result
+    counts = publication_counts(read_bib_entries(publications))
+    assert counts["publications"] == 2
 
 
 def test_validator_checks_object_references_assets_and_citations(tmp_path: Path) -> None:

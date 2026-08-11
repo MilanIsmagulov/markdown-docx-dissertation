@@ -9,15 +9,19 @@ from pathlib import Path
 
 import yaml
 
+from .bibliography import publication_counts, read_bib_entries
+
 
 DIRECTIVE_RE = re.compile(r"^```(?P<kind>table|figure|equation)\s*$")
 REFERENCE_RE = re.compile(r"\{\{ref:(?P<kind>table|figure|equation):(?P<id>[A-Za-z0-9_.-]+)}}")
 NUMBER_RE = re.compile(r"\{\{number:(?P<kind>table|figure|equation):(?P<id>[A-Za-z0-9_.-]+)}}")
 OBJECT_LIST_RE = re.compile(r"\{\{list:(?P<kind>figures|tables)}}")
-TERMS_LIST_RE = re.compile(r"\{\{list:(?P<kind>abbreviations|symbols)}}")
+TERMS_LIST_RE = re.compile(r"\{\{list:(?P<kind>abbreviations|symbols|glossary)}}")
+STAT_RE = re.compile(r"\{\{stat:(?P<name>[a-z_]+)}}")
+STAT_PHRASE_RE = re.compile(r"\{\{stat_phrase:(?P<name>[a-z_]+)}}")
 CHAPTER_RE = re.compile(r"^#\s+Глава\s+(?P<number>\d+)\b", re.IGNORECASE)
 PDF_EMBED_RE = re.compile(
-    r"^\s*!\[\[(?P<target>[^]|#]+\.pdf)(?:#page=(?P<page>\d+))?(?:\|[^]]+)?]]\s*$",
+    r"^\s*!\[\[(?P<target>[^]|#]+\.pdf)(?:#page=(?P<page>\d+))?(?:\|(?P<width>\d+(?:\.\d+)?mm))?]]\s*$",
     re.IGNORECASE,
 )
 
@@ -103,7 +107,12 @@ def _render_pdf_pages(source: Path, content_dir: Path, page: int | None = None) 
     return pages
 
 
-def process_assets(markdown: str, content_dir: Path) -> str:
+def process_assets(
+    markdown: str,
+    content_dir: Path,
+    bibliography: Path | None = None,
+    publications_bibliography: Path | None = None,
+) -> str:
     lines = markdown.splitlines()
     counters = {"table": 0, "figure": 0, "equation": 0}
     labels: dict[tuple[str, str], ObjectNumber] = {}
@@ -120,10 +129,11 @@ def process_assets(markdown: str, content_dir: Path) -> str:
                 raise ValueError(f"PDF asset not found: {source}")
             requested_page = int(pdf_match["page"]) if pdf_match["page"] else None
             pages = _render_pdf_pages(source, content_dir, requested_page)
+            width = pdf_match["width"] or "160mm"
             for page_index, page_path in enumerate(pages):
                 if page_index:
                     output.extend(("[[PDF_PAGE_BREAK]]", ""))
-                output.extend((f"![](<{page_path.as_posix()}>){{width=160mm}}", ""))
+                output.extend((f"![](<{page_path.as_posix()}>){{width={width}}}", ""))
             index += 1
             continue
         chapter_match = CHAPTER_RE.match(line)
@@ -205,7 +215,7 @@ def process_assets(markdown: str, content_dir: Path) -> str:
         entries = data.get(match["kind"], [])
         if not isinstance(entries, list):
             raise ValueError(f"terms.{match['kind']} must be a list")
-        rows = [["Обозначение", "Расшифровка"]]
+        rows = [["Термин" if match["kind"] == "glossary" else "Обозначение", "Определение" if match["kind"] == "glossary" else "Расшифровка"]]
         for entry in entries:
             if (
                 not isinstance(entry, dict)
@@ -217,6 +227,55 @@ def process_assets(markdown: str, content_dir: Path) -> str:
         return _markdown_table(rows)
 
     assembled = TERMS_LIST_RE.sub(replace_terms, assembled)
+
+    publication_stats = publication_counts(read_bib_entries(publications_bibliography))
+    stats = {
+        "chapters": len(re.findall(r"^#\s+Глава\s+\d+\b", assembled, re.MULTILINE | re.IGNORECASE)),
+        "figures": len(labels_for_kind(labels, "figure")),
+        "tables": len(labels_for_kind(labels, "table")),
+        "appendices": len(re.findall(r"^#\s+ПРИЛОЖЕНИЕ\s+[А-Я]\b", assembled, re.MULTILINE)),
+        "bibliography": len(read_bib_entries(bibliography)),
+        **publication_stats,
+    }
+    nouns = {
+        "chapters": ("глава", "главы", "глав"),
+        "figures": ("рисунок", "рисунка", "рисунков"),
+        "tables": ("таблица", "таблицы", "таблиц"),
+        "appendices": ("приложение", "приложения", "приложений"),
+        "bibliography": ("наименование", "наименования", "наименований"),
+        "publications": ("печатная работа", "печатные работы", "печатных работ"),
+        "publications_vak": ("статья", "статьи", "статей"),
+        "publications_scopus_wos": ("публикация", "публикации", "публикаций"),
+        "publications_other": ("работа", "работы", "работ"),
+        "patents": ("патент", "патента", "патентов"),
+        "software_registrations": ("свидетельство", "свидетельства", "свидетельств"),
+    }
+
+    def inflect(number: int, forms: tuple[str, str, str]) -> str:
+        if number % 10 == 1 and number % 100 != 11:
+            form = forms[0]
+        elif number % 10 in {2, 3, 4} and number % 100 not in {12, 13, 14}:
+            form = forms[1]
+        else:
+            form = forms[2]
+        return f"{number} {form}"
+
+    assembled = STAT_PHRASE_RE.sub(
+        lambda match: inflect(stats[match["name"]], nouns[match["name"]])
+        if match["name"] in stats and match["name"] in nouns
+        else (_ for _ in ()).throw(ValueError(f"unknown document statistic phrase: {match['name']}")),
+        assembled,
+    )
+
+    def replace_stat(match: re.Match[str]) -> str:
+        name = match["name"]
+        if name == "pages":
+            return "[[STAT:pages]]"
+        if name not in stats:
+            raise ValueError(f"unknown document statistic: {name}")
+        return str(stats[name])
+
+    assembled = STAT_RE.sub(replace_stat, assembled)
 
     def replace_reference(match: re.Match[str]) -> str:
         key = (match["kind"], match["id"])
@@ -233,3 +292,7 @@ def process_assets(markdown: str, content_dir: Path) -> str:
         return f"[[NUMBER:{match['kind']}:{match['id']}:{labels[key].number}]]"
 
     return NUMBER_RE.sub(replace_number, assembled).strip() + "\n"
+
+
+def labels_for_kind(labels: dict[tuple[str, str], ObjectNumber], kind: str) -> list[ObjectNumber]:
+    return [number for (object_kind, _), number in labels.items() if object_kind == kind]

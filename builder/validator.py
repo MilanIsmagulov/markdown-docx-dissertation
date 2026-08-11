@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from .bibliography import BibEntry, read_bib_entries
 from .model import Diagnostic, Note, SourceLocation
 from .resolver import ProjectIndex
 
@@ -23,6 +24,7 @@ def validate_index(
     index: ProjectIndex,
     root_note: Path | None = None,
     bibliography: Path | None = None,
+    publications_bibliography: Path | None = None,
 ) -> list[Diagnostic]:
     diagnostics = list(index.diagnostics)
     if root_note is not None and not root_note.is_file():
@@ -42,6 +44,29 @@ def validate_index(
                 asset = (index.content_dir / link.target).resolve()
                 if not asset.is_relative_to(index.content_dir.resolve()) or not asset.is_file():
                     diagnostics.append(Diagnostic("E_ASSET_MISSING", f"PDF asset does not exist: '{link.target}'", link.location))
+                elif asset.stat().st_size == 0:
+                    diagnostics.append(Diagnostic("E_PDF_EMPTY", f"PDF asset is empty: '{link.target}'", link.location))
+                else:
+                    if asset.stat().st_size > 50 * 1024 * 1024:
+                        diagnostics.append(
+                            Diagnostic("W_PDF_LARGE", f"PDF asset exceeds 50 MiB: '{link.target}'", link.location, "warning")
+                        )
+                    if link.heading and link.heading.casefold().startswith("page="):
+                        try:
+                            requested_page = int(link.heading.split("=", 1)[1])
+                            from pypdf import PdfReader
+
+                            page_count = len(PdfReader(asset).pages)
+                            if requested_page < 1 or requested_page > page_count:
+                                diagnostics.append(
+                                    Diagnostic(
+                                        "E_PDF_PAGE_RANGE",
+                                        f"PDF page {requested_page} is outside 1..{page_count}: '{link.target}'",
+                                        link.location,
+                                    )
+                                )
+                        except (ValueError, OSError):
+                            diagnostics.append(Diagnostic("E_PDF_PAGE", f"invalid PDF page selector: '{link.raw}'", link.location))
                 continue
             target, problem = index.resolve(link)
             if problem:
@@ -58,7 +83,8 @@ def validate_index(
                         )
                     )
     diagnostics.extend(_validate_transclusion_cycles(index))
-    diagnostics.extend(_validate_document_sources(index, bibliography))
+    diagnostics.extend(_validate_document_sources(index, bibliography, publications_bibliography))
+    diagnostics.extend(_validate_appendices(index))
     diagnostics.extend(_validate_reachability(index, root_note))
     return diagnostics
 
@@ -67,7 +93,11 @@ def _line_for_offset(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
-def _validate_document_sources(index: ProjectIndex, bibliography: Path | None) -> list[Diagnostic]:
+def _validate_document_sources(
+    index: ProjectIndex,
+    bibliography: Path | None,
+    publications_bibliography: Path | None = None,
+) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     objects: dict[tuple[str, str], SourceLocation] = {}
     references: list[tuple[str, str, SourceLocation]] = []
@@ -117,14 +147,81 @@ def _validate_document_sources(index: ProjectIndex, bibliography: Path | None) -
         if (kind, object_id) not in objects:
             diagnostics.append(Diagnostic("E_OBJECT_REFERENCE_MISSING", f"unknown {kind} reference '{object_id}'", location))
 
-    if bibliography is not None and bibliography.is_file():
-        bib_keys = {match["key"] for match in BIB_KEY_RE.finditer(bibliography.read_text(encoding="utf-8-sig"))}
+    bibliography_entries = read_bib_entries(bibliography)
+    publication_entries = read_bib_entries(publications_bibliography)
+    all_entries = [*bibliography_entries, *publication_entries]
+    if all_entries:
+        bib_keys = {entry.key for entry in all_entries}
         for key, location in citations.items():
             if key not in bib_keys:
                 diagnostics.append(Diagnostic("E_CITATION_MISSING", f"citation key '{key}' is absent from bibliography", location))
         for key in sorted(bib_keys - citations.keys()):
-            diagnostics.append(Diagnostic("W_BIB_UNUSED", f"bibliography entry '{key}' is not cited", severity="warning"))
+            if key in {entry.key for entry in bibliography_entries}:
+                diagnostics.append(Diagnostic("W_BIB_UNUSED", f"bibliography entry '{key}' is not cited", severity="warning"))
+        diagnostics.extend(_validate_bibliography_entries(all_entries))
     return diagnostics
+
+
+def _validate_bibliography_entries(entries: list[BibEntry]) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    required = {
+        "article": ({"author", "title", "year"}, ({"journal", "eprint"},)),
+        "inproceedings": ({"author", "title", "year", "booktitle"}, ()),
+        "book": ({"title", "year", "publisher"}, ({"author", "editor"},)),
+        "online": ({"title", "url", "urldate"}, ()),
+        "www": ({"title", "url", "urldate"}, ()),
+        "standard": ({"title", "year", "number"}, ()),
+        "patent": ({"author", "title", "year", "number"}, ()),
+        "phdthesis": ({"author", "title", "year", "school"}, ()),
+        "mastersthesis": ({"author", "title", "year", "school"}, ()),
+        "techreport": ({"author", "title", "year", "institution"}, ()),
+        "software": ({"author", "title", "year", "number"}, ()),
+    }
+    seen_keys: set[str] = set()
+    identifiers: dict[tuple[str, str], str] = {}
+    for entry in entries:
+        if entry.key.casefold() in seen_keys:
+            diagnostics.append(Diagnostic("E_BIB_KEY_DUPLICATE", f"duplicate bibliography key '{entry.key}'"))
+        seen_keys.add(entry.key.casefold())
+        specification = required.get(entry.entry_type)
+        if specification:
+            mandatory, alternatives = specification
+            missing = sorted(field for field in mandatory if not entry.fields.get(field))
+            for group in alternatives:
+                if not any(entry.fields.get(field) for field in group):
+                    missing.append("/".join(sorted(group)))
+            if missing:
+                diagnostics.append(
+                    Diagnostic("E_BIB_FIELD_MISSING", f"{entry.key} ({entry.entry_type}) misses: {', '.join(missing)}")
+                )
+        if entry.fields.get("url") and not entry.fields.get("urldate"):
+            diagnostics.append(Diagnostic("E_BIB_ACCESS_DATE_MISSING", f"URL entry '{entry.key}' requires urldate"))
+        for field in ("doi", "isbn"):
+            value = re.sub(r"[^a-z0-9]", "", entry.fields.get(field, "").casefold())
+            if not value:
+                continue
+            identifier = (field, value)
+            if identifier in identifiers:
+                diagnostics.append(
+                    Diagnostic("E_BIB_IDENTIFIER_DUPLICATE", f"duplicate {field.upper()} in '{identifiers[identifier]}' and '{entry.key}'")
+                )
+            else:
+                identifiers[identifier] = entry.key
+    return diagnostics
+
+
+def _validate_appendices(index: ProjectIndex) -> list[Diagnostic]:
+    labels: list[str] = []
+    for note in index.notes:
+        if str(note.metadata.get("type", "")).casefold() != "appendix":
+            continue
+        match = re.search(r"Приложение\s+([А-Я])", note.title, re.IGNORECASE)
+        if match:
+            labels.append(match.group(1).upper())
+    expected_letters = list("АБВГДЕЖИКЛМНПРСТУФХЦШЩЭЮЯ")[: len(labels)]
+    if sorted(labels, key=lambda item: expected_letters.index(item) if item in expected_letters else 999) != expected_letters:
+        return [Diagnostic("E_APPENDIX_ORDER", f"appendices must be consecutive: {', '.join(expected_letters)}")]
+    return []
 
 
 def _validate_reachability(index: ProjectIndex, root_note: Path | None) -> list[Diagnostic]:

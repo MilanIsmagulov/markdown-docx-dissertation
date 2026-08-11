@@ -185,6 +185,7 @@ REFERENCE_FIELD_RE = re.compile(
     r"(?P<id>[A-Za-z0-9_.-]+):(?P<number>\d+(?:\.\d+)*)]]"
 )
 OBJECT_LIST_MARKER_RE = re.compile(r"^\[\[LIST:(?P<kind>figure|table)]]$")
+STAT_FIELD_RE = re.compile(r"\[\[STAT:(?P<name>pages)]]")
 
 
 def _bookmark_name(kind: str, object_id: str) -> str:
@@ -367,6 +368,11 @@ def _install_cross_reference_fields(document: Document) -> None:
             return nodes
 
         _replace_markers_in_runs(paragraph, REFERENCE_FIELD_RE, replace_reference)
+
+        def replace_stat(match: re.Match, rpr):
+            return [_field_run("NUMPAGES", "1", rpr)]
+
+        _replace_markers_in_runs(paragraph, STAT_FIELD_RE, replace_stat)
 
     # Pandoc also copies a figure caption into wp:docPr/@descr as image alt
     # text. Keep the accessibility description readable and free of compiler
@@ -712,6 +718,7 @@ def render_docx(
     output_path: Path,
     *,
     bibliography: Path | None = None,
+    publications_bibliography: Path | None = None,
     csl: Path | None = None,
     bibliography_title: str = "СПИСОК ЛИТЕРАТУРЫ",
 ) -> Path:
@@ -729,15 +736,12 @@ def render_docx(
             "--metadata=lang:ru-RU",
             "--metadata=toc-title:ОГЛАВЛЕНИЕ",
     ]
-    if bibliography is not None:
-        command.extend(
-            [
-                "--citeproc",
-                "--bibliography",
-                str(bibliography),
-                f"--metadata=reference-section-title:{bibliography_title}",
-            ]
-        )
+    bibliographies = [path for path in (bibliography, publications_bibliography) if path is not None]
+    if bibliographies:
+        command.append("--citeproc")
+        for path in bibliographies:
+            command.extend(["--bibliography", str(path)])
+        command.append(f"--metadata=reference-section-title:{bibliography_title}")
     if csl is not None:
         command.extend(["--csl", str(csl)])
     command.extend(["--output", str(output_path)])
