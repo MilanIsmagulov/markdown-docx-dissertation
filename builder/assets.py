@@ -129,7 +129,7 @@ def process_assets(
                 raise ValueError(f"PDF asset not found: {source}")
             requested_page = int(pdf_match["page"]) if pdf_match["page"] else None
             pages = _render_pdf_pages(source, content_dir, requested_page)
-            width = pdf_match["width"] or "160mm"
+            width = pdf_match["width"] or "175mm"
             for page_index, page_path in enumerate(pages):
                 if page_index:
                     output.extend(("[[PDF_PAGE_BREAK]]", ""))
@@ -178,7 +178,7 @@ def process_assets(
             source = content_dir / str(config.get("source", ""))
             if not source.is_file():
                 raise ValueError(f"figure asset not found: {source}")
-            width = str(config.get("width", "140mm"))
+            width = str(config.get("width", "175mm"))
             output.extend(
                 (
                     f"![Рисунок [[TARGET:{kind}:{object_id}:{chapter}:{counters[kind]}]] – {caption}]"

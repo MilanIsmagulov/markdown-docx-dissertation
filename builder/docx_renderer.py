@@ -423,6 +423,24 @@ def _format_numbered_objects(document: Document, styles: dict) -> None:
         aspect_ratio = shape.height / shape.width
         shape.width = usable_width
         shape.height = int(usable_width * aspect_ratio)
+    usable_height_mm = 297 - _number(styles["document"]["margins"]["top"], "mm") - _number(
+        styles["document"]["margins"]["bottom"], "mm"
+    )
+    usable_height = Mm(usable_height_mm)
+    # Treat every inline image consistently, including rasterized PDF pages in
+    # appendices. Preserve proportions and use the full printable width unless
+    # the image would become taller than the printable page.
+    for shape in document.inline_shapes:
+        if not shape.width:
+            continue
+        aspect_ratio = shape.height / shape.width
+        target_width = usable_width
+        target_height = int(target_width * aspect_ratio)
+        if target_height > usable_height:
+            target_height = usable_height
+            target_width = int(target_height / aspect_ratio)
+        shape.width = target_width
+        shape.height = target_height
     for table in document.tables:
         if not table.rows or not table.columns:
             continue
@@ -547,15 +565,12 @@ def _format_pdf_page_breaks(document: Document) -> None:
     for index, paragraph in enumerate(paragraphs):
         if paragraph.text.strip() != "[[PDF_PAGE_BREAK]]":
             continue
-        paragraph.clear()
-        paragraph.paragraph_format.first_line_indent = Mm(0)
-        paragraph.paragraph_format.space_before = Pt(0)
-        paragraph.paragraph_format.space_after = Pt(0)
-        paragraph.add_run().add_break(WD_BREAK.PAGE)
         if index + 1 < len(paragraphs):
             image_paragraph = paragraphs[index + 1]
             image_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
             image_paragraph.paragraph_format.first_line_indent = Mm(0)
+            image_paragraph.paragraph_format.page_break_before = True
+        paragraph._element.getparent().remove(paragraph._element)
 
 
 def _add_title_paragraph(

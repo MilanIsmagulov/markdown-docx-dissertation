@@ -294,6 +294,7 @@ def test_pdf_transclusion_is_validated_preserved_and_expanded(tmp_path: Path, mo
     assert "page-1.png" in expanded
     assert "[[PDF_PAGE_BREAK]]" in expanded
     assert "page-2.png" in expanded
+    assert "{width=175mm}" in expanded
 
 
 def test_validator_reports_missing_pdf_asset(tmp_path: Path) -> None:
