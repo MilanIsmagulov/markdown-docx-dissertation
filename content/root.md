@@ -6,6 +6,7 @@ title: Диссертация
 
 <!-- scaffold:begin -->
 ![[00 Front Matter/Введение]]
+![[00 Front Matter/Списки]]
 ![[01 Chapter/Глава 1. Тест]]
 ![[02 Chapter/Глава 2. Тест]]
 ![[03 Chapter/Глава 3. Тест]]

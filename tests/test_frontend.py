@@ -149,6 +149,20 @@ def test_word_cross_references_use_seq_ref_fields_and_bookmarks() -> None:
         assert not field_run.xpath("./w:rPr/w:iCs")
 
 
+def test_word_object_lists_use_ref_and_pageref_fields() -> None:
+    document = Document()
+    document.add_paragraph("[[LIST:figure]]")
+    document.add_paragraph("Рисунок [[TARGET:figure:pipeline:1:1]] – Схема обработки")
+
+    _install_cross_reference_fields(document)
+
+    xml = document._element.xml
+    assert "[[LIST:" not in xml
+    assert "REF md_fig_" in xml
+    assert "PAGEREF md_fig_" in xml
+    assert "Схема обработки" in xml
+
+
 def test_asset_processor_numbers_csv_figure_equation_and_references(tmp_path: Path) -> None:
     assets = tmp_path / "assets"
     assets.mkdir()
@@ -186,6 +200,49 @@ latex: Q = A + B
     assert "![Рисунок [[TARGET:figure:scheme:1:1]] – Схема]" in result
     assert "[[EQUATION:score:1:1]]" in result
     assert "$$\nQ = A + B\n$$" in result
+
+
+def test_asset_processor_expands_object_and_term_lists(tmp_path: Path) -> None:
+    content = tmp_path / "content"
+    content.mkdir()
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "terms.yaml").write_text(
+        "abbreviations:\n  - term: ИИ\n    definition: искусственный интеллект\nsymbols: []\n",
+        encoding="utf-8",
+    )
+    result = process_assets(
+        "{{list:figures}}\n\n{{list:tables}}\n\n{{list:abbreviations}}\n\n{{list:symbols}}\n",
+        content,
+    )
+    assert "[[LIST:figure]]" in result
+    assert "[[LIST:table]]" in result
+    assert "| ИИ | искусственный интеллект |" in result
+
+
+def test_validator_checks_object_references_assets_and_citations(tmp_path: Path) -> None:
+    root = write_note(
+        tmp_path,
+        "root.md",
+        """# Root
+
+См. {{number:figure:missing}} и [@absent].
+
+```figure
+id: scheme
+caption: Схема
+source: assets/missing.png
+```
+""",
+    )
+    bibliography = tmp_path / "bibliography.bib"
+    bibliography.write_text("@article{unused, title={Unused}}\n", encoding="utf-8")
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root, bibliography)
+    codes = {item.code for item in diagnostics}
+    assert "E_ASSET_MISSING" in codes
+    assert "E_OBJECT_REFERENCE_MISSING" in codes
+    assert "E_CITATION_MISSING" in codes
+    assert "W_BIB_UNUSED" in codes
 
 
 def test_pdf_transclusion_is_validated_preserved_and_expanded(tmp_path: Path, monkeypatch) -> None:
@@ -233,11 +290,12 @@ def test_scaffold_creates_nested_obsidian_structure_and_is_idempotent(tmp_path: 
 
     created, chapters = scaffold(tmp_path)
     assert chapters == 2
-    assert created == 27
+    assert created == 28
     root = (tmp_path / "content" / "root.md").read_text(encoding="utf-8")
     chapter = (tmp_path / "content" / "01 Chapter" / "Глава 1. Тест.md").read_text(encoding="utf-8")
     assert "![[01 Chapter/Глава 1. Тест]]" in root
     assert "![[00 Front Matter/Введение]]" in root
+    assert "![[00 Front Matter/Списки]]" in root
     assert "![[90 Back Matter/Заключение]]" in root
     assert "![[90 Back Matter/Список литературы]]" in root
     assert "![[99 Appendices/Приложения]]" in root

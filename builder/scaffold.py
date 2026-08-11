@@ -97,7 +97,7 @@ def scaffold(project_root: Path) -> tuple[int, int]:
     structure = load_structure(project_root)
     content = project_root / "content"
     root = content / "root.md"
-    root_links: list[str] = ["00 Front Matter/Введение"]
+    root_links: list[str] = ["00 Front Matter/Введение", "00 Front Matter/Списки"]
     created = 0
 
     introduction_dir = content / "00 Front Matter"
@@ -116,6 +116,16 @@ def scaffold(project_root: Path) -> tuple[int, int]:
             + f"**{title}.** Здесь размещается текст соответствующего структурного элемента введения.\n",
         )
     _replace_link_block(introduction_path, introduction_links, after_heading=True)
+
+    lists_rel = "00 Front Matter/Списки"
+    created += _write_new(
+        content / f"{lists_rel}.md",
+        _front_matter("section:lists", "structural-section", "Списки")
+        + "# СПИСОК РИСУНКОВ\n\n{{list:figures}}\n\n"
+        + "# СПИСОК ТАБЛИЦ\n\n{{list:tables}}\n\n"
+        + "# СПИСОК СОКРАЩЕНИЙ\n\n{{list:abbreviations}}\n\n"
+        + "# СПИСОК ОБОЗНАЧЕНИЙ\n\n{{list:symbols}}\n",
+    )
 
     for chapter in range(1, structure.chapters + 1):
         chapter_title = structure.chapter_title_template.format(chapter=chapter)

@@ -13,6 +13,8 @@ import yaml
 DIRECTIVE_RE = re.compile(r"^```(?P<kind>table|figure|equation)\s*$")
 REFERENCE_RE = re.compile(r"\{\{ref:(?P<kind>table|figure|equation):(?P<id>[A-Za-z0-9_.-]+)}}")
 NUMBER_RE = re.compile(r"\{\{number:(?P<kind>table|figure|equation):(?P<id>[A-Za-z0-9_.-]+)}}")
+OBJECT_LIST_RE = re.compile(r"\{\{list:(?P<kind>figures|tables)}}")
+TERMS_LIST_RE = re.compile(r"\{\{list:(?P<kind>abbreviations|symbols)}}")
 CHAPTER_RE = re.compile(r"^#\s+Глава\s+(?P<number>\d+)\b", re.IGNORECASE)
 PDF_EMBED_RE = re.compile(
     r"^\s*!\[\[(?P<target>[^]|#]+\.pdf)(?:#page=(?P<page>\d+))?(?:\|[^]]+)?]]\s*$",
@@ -190,6 +192,31 @@ def process_assets(markdown: str, content_dir: Path) -> str:
             )
 
     assembled = "\n".join(output)
+    assembled = OBJECT_LIST_RE.sub(
+        lambda match: f"[[LIST:{'figure' if match['kind'] == 'figures' else 'table'}]]",
+        assembled,
+    )
+
+    def replace_terms(match: re.Match[str]) -> str:
+        terms_path = content_dir.parent / "config" / "terms.yaml"
+        if not terms_path.is_file():
+            raise ValueError(f"terms configuration not found: {terms_path}")
+        data = yaml.safe_load(terms_path.read_text(encoding="utf-8-sig")) or {}
+        entries = data.get(match["kind"], [])
+        if not isinstance(entries, list):
+            raise ValueError(f"terms.{match['kind']} must be a list")
+        rows = [["Обозначение", "Расшифровка"]]
+        for entry in entries:
+            if (
+                not isinstance(entry, dict)
+                or not str(entry.get("term", "")).strip()
+                or not str(entry.get("definition", "")).strip()
+            ):
+                raise ValueError(f"every terms.{match['kind']} entry requires term and definition")
+            rows.append([str(entry["term"]).strip(), str(entry["definition"]).strip()])
+        return _markdown_table(rows)
+
+    assembled = TERMS_LIST_RE.sub(replace_terms, assembled)
 
     def replace_reference(match: re.Match[str]) -> str:
         key = (match["kind"], match["id"])

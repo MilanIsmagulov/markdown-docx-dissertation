@@ -184,6 +184,7 @@ REFERENCE_FIELD_RE = re.compile(
     r"\[\[(?P<form>REF|NUMBER):(?P<kind>table|figure|equation):"
     r"(?P<id>[A-Za-z0-9_.-]+):(?P<number>\d+(?:\.\d+)*)]]"
 )
+OBJECT_LIST_MARKER_RE = re.compile(r"^\[\[LIST:(?P<kind>figure|table)]]$")
 
 
 def _bookmark_name(kind: str, object_id: str) -> str:
@@ -226,6 +227,12 @@ def _text_run(text: str, rpr=None) -> OxmlElement:
         node.set(qn("xml:space"), "preserve")
     node.text = text
     run.append(node)
+    return run
+
+
+def _tab_run() -> OxmlElement:
+    run = OxmlElement("w:r")
+    run.append(OxmlElement("w:tab"))
     return run
 
 
@@ -278,8 +285,18 @@ def _sequence_nodes(match: re.Match, rpr, bookmark_id: int) -> list[OxmlElement]
 def _install_cross_reference_fields(document: Document) -> None:
     bookmark_id = 1000
     targets: set[tuple[str, str]] = set()
+    captions: dict[str, list[tuple[str, str, str]]] = {"figure": [], "table": []}
 
     for paragraph in document.paragraphs:
+        paragraph_text = paragraph.text
+        target_matches = list(TARGET_RE.finditer(paragraph_text))
+        for match in target_matches:
+            if match["kind"] in captions:
+                caption = paragraph_text[match.end() :].strip().lstrip("–-").strip()
+                captions[match["kind"]].append(
+                    (_bookmark_name(match["kind"], match["id"]), f"{match['chapter']}.{match['ordinal']}", caption)
+                )
+
         def replace_target(match: re.Match, rpr):
             nonlocal bookmark_id
             key = (match["kind"], match["id"])
@@ -291,6 +308,39 @@ def _install_cross_reference_fields(document: Document) -> None:
             return nodes
 
         _replace_markers_in_runs(paragraph, TARGET_RE, replace_target)
+
+    for paragraph in list(document.paragraphs):
+        marker = OBJECT_LIST_MARKER_RE.match(paragraph.text.strip())
+        if marker is None:
+            continue
+        kind = marker["kind"]
+        label = "Рисунок" if kind == "figure" else "Таблица"
+        for bookmark, number, caption in captions[kind]:
+            item = OxmlElement("w:p")
+            ppr = OxmlElement("w:pPr")
+            justification = OxmlElement("w:jc")
+            justification.set(qn("w:val"), "left")
+            ppr.append(justification)
+            indentation = OxmlElement("w:ind")
+            indentation.set(qn("w:left"), "0")
+            indentation.set(qn("w:firstLine"), "0")
+            ppr.append(indentation)
+            tabs = OxmlElement("w:tabs")
+            tab = OxmlElement("w:tab")
+            tab.set(qn("w:val"), "right")
+            tab.set(qn("w:leader"), "dot")
+            tab.set(qn("w:pos"), "9922")
+            tabs.append(tab)
+            ppr.append(tabs)
+            item.append(ppr)
+            item.append(_text_run(f"{label} "))
+            item.append(_field_run(f"REF {bookmark} \\h", number))
+            if caption:
+                item.append(_text_run(f" – {caption}"))
+            item.append(_tab_run())
+            item.append(_field_run(f"PAGEREF {bookmark} \\h", "1"))
+            paragraph._p.addprevious(item)
+        paragraph._element.getparent().remove(paragraph._element)
 
     for paragraph in document.paragraphs:
         def replace_reference(match: re.Match, rpr):
