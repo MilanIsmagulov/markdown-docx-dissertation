@@ -23,6 +23,7 @@ layout:
     organization_after: 30pt
     supervisor_after: 30pt
     opponents_after: 30pt
+    opponent_entry_after: 40pt
     leading_organization_after: 72pt
     defense_after: 18pt
     access_after: 30pt

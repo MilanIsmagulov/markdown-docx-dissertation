@@ -428,7 +428,9 @@ def test_abstract_front_matter_uses_configured_font_sizes() -> None:
     assert any(run.text.endswith("ИВАНОВ Иван Иванович") and run.bold for run in verso_runs)
     assert len(document.tables) == 1
     assert len(table.columns) == 2
-    assert table.autofit is False
+    assert table.autofit is True
+    assert table._tbl.tblPr.xpath("./w:tblW/@w:type") == ["pct"]
+    assert table._tbl.tblPr.xpath("./w:tblW/@w:w") == ["5000"]
     assert table._tbl.tblPr.xpath("./w:tblCaption/@w:val") == ["abstract-layout"]
     assert "Научный руководитель:" in "\n".join(cell.text for cell in table.columns[0].cells)
     assert "Официальные оппоненты:" in "\n".join(cell.text for cell in table.columns[0].cells)
@@ -438,6 +440,16 @@ def test_abstract_front_matter_uses_configured_font_sizes() -> None:
     )
     assert all(run.font.size.pt == 10 for run in verso_runs if run.text)
     assert table.rows[0].cells[0].paragraphs[0].paragraph_format.space_after.pt == 30
+    spaced_opponent_names = [
+        paragraph
+        for row in table.rows
+        for cell in row.cells
+        for paragraph in cell.paragraphs
+        if paragraph.text == "ИВАНОВ Иван Иванович"
+        and paragraph.paragraph_format.space_after is not None
+        and paragraph.paragraph_format.space_after.pt == 40
+    ]
+    assert len(spaced_opponent_names) == 1
 
 
 def test_validator_reports_missing_pdf_asset(tmp_path: Path) -> None:

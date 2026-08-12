@@ -871,8 +871,7 @@ def _prepend_abstract_front_matter(document: Document, metadata: dict, abstract_
     verso_table = document.add_table(rows=0, cols=2)
     verso_table.style = None
     verso_table.alignment = WD_TABLE_ALIGNMENT.LEFT
-    verso_table.autofit = False
-    table_width_twips = int(Mm(118).twips)
+    verso_table.autofit = True
     column_width = Mm(59)
     table_properties = verso_table._tbl.tblPr
     table_caption = OxmlElement("w:tblCaption")
@@ -886,13 +885,13 @@ def _prepend_abstract_front_matter(document: Document, metadata: dict, abstract_
     if table_width is None:
         table_width = OxmlElement("w:tblW")
         table_properties.insert(0, table_width)
-    table_width.set(qn("w:type"), "dxa")
-    table_width.set(qn("w:w"), str(table_width_twips))
+    table_width.set(qn("w:type"), "pct")
+    table_width.set(qn("w:w"), "5000")
     table_layout = table_properties.find(qn("w:tblLayout"))
     if table_layout is None:
         table_layout = OxmlElement("w:tblLayout")
         table_properties.append(table_layout)
-    table_layout.set(qn("w:type"), "fixed")
+    table_layout.set(qn("w:type"), "autofit")
     borders = table_properties.find(qn("w:tblBorders"))
     if borders is None:
         borders = OxmlElement("w:tblBorders")
@@ -939,7 +938,13 @@ def _prepend_abstract_front_matter(document: Document, metadata: dict, abstract_
             left="Официальные оппоненты:" if index == 0 else "",
             right=degree,
         )
-        name_cells = add_grid_row(verso_table, left="", right=name, right_bold=True)
+        name_cells = add_grid_row(
+            verso_table,
+            left="",
+            right=name,
+            right_bold=True,
+            right_after=_number(verso_spacing.get("opponent_entry_after", "40pt"), "pt"),
+        )
         opponent_rows.extend((degree_cells, name_cells))
     if len(opponent_rows) > 1:
         opponent_label = opponent_rows[0][0].merge(opponent_rows[-1][0])
