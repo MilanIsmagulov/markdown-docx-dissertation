@@ -1,0 +1,20 @@
+# Записи из рабочего автореферата, для которых пока недостаточно реквизитов.
+# Этот файл не участвует в цитировании и автоматических счётчиках.
+pending:
+  - id: publication:imt-journal
+    category: vak
+    status: awaiting-bibliographic-data
+    note: Публикация в IMT-Journal (Иркутск)
+  - id: publication:pattern-recognition-image-analysis
+    category: scopus
+    status: awaiting-bibliographic-data
+    note: Pattern Recognition and Image Analysis
+  - id: software:1
+    category: software-registration
+    status: awaiting-registration-data
+  - id: software:2
+    category: software-registration
+    status: awaiting-registration-data
+  - id: software:3
+    category: software-registration
+    status: awaiting-registration-data

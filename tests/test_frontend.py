@@ -341,6 +341,19 @@ def test_landscape_section_profile_creates_real_word_section(tmp_path: Path) -> 
     assert round(document.sections[1].page_height / Mm(1)) == 210
 
 
+def test_validator_reports_missing_semantic_source(tmp_path: Path) -> None:
+    root = write_note(tmp_path, "root.md", "![[summary]]\n")
+    write_note(
+        tmp_path,
+        "summary.md",
+        "---\nid: abstract:chapter:1\ntype: chapter-summary\nsource: chapter:1\n---\n\nSummary\n",
+    )
+
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
+
+    assert any(item.code == "E_SEMANTIC_SOURCE_MISSING" for item in diagnostics)
+
+
 def test_validator_reports_missing_pdf_asset(tmp_path: Path) -> None:
     root = write_note(tmp_path, "root.md", "![[assets/missing.pdf]]\n")
     diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)

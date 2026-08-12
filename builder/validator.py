@@ -87,6 +87,7 @@ def validate_index(
     diagnostics.extend(_validate_document_sources(index, bibliography, publications_bibliography))
     diagnostics.extend(_validate_appendices(index))
     diagnostics.extend(_validate_sections(index))
+    diagnostics.extend(_validate_semantic_sources(index))
     diagnostics.extend(_validate_reachability(index, root_note))
     return diagnostics
 
@@ -127,6 +128,38 @@ def _validate_sections(index: ProjectIndex) -> list[Diagnostic]:
                         SourceLocation(note.path, _line_for_offset(note.body, match.start())),
                     )
                 )
+    return diagnostics
+
+
+def _validate_semantic_sources(index: ProjectIndex) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    for note in index.notes:
+        source = str(note.metadata.get("source", "")).strip()
+        if source and source.casefold() not in index.by_id:
+            diagnostics.append(
+                Diagnostic(
+                    "E_SEMANTIC_SOURCE_MISSING",
+                    f"semantic source '{source}' declared by '{note.title}' does not exist",
+                    SourceLocation(note.path, 1),
+                )
+            )
+    registry_path = index.root / "config" / "research.yaml"
+    if not registry_path.is_file():
+        return diagnostics
+    try:
+        registry = yaml.safe_load(registry_path.read_text(encoding="utf-8-sig")) or {}
+    except yaml.YAMLError as exc:
+        diagnostics.append(Diagnostic("E_RESEARCH_YAML", f"invalid research registry: {exc}"))
+        return diagnostics
+    research = registry.get("research", {})
+    if not isinstance(research, dict):
+        diagnostics.append(Diagnostic("E_RESEARCH_CONFIG", "research registry must be a mapping"))
+        return diagnostics
+    for role, note_id in research.items():
+        if str(note_id).casefold() not in index.by_id:
+            diagnostics.append(
+                Diagnostic("E_RESEARCH_SOURCE_MISSING", f"research.{role} points to missing note '{note_id}'")
+            )
     return diagnostics
 
 
@@ -285,10 +318,14 @@ def _validate_reachability(index: ProjectIndex, root_note: Path | None) -> list[
                 visit(target)
 
     visit(root)
+    library_types = {"canonical-research-statement"}
+    alternate_document_types = {"abstract", "chapter-summary"} if root.metadata.get("type") != "abstract" else {"document"}
     return [
         Diagnostic("W_NOTE_ORPHAN", "note is not included from the root document", SourceLocation(note.path, 1), "warning")
         for note in index.notes
-        if note.path not in reachable and not note.path.name.startswith("_")
+        if note.path not in reachable
+        and not note.path.name.startswith("_")
+        and str(note.metadata.get("type", "")) not in library_types | alternate_document_types
     ]
 
 

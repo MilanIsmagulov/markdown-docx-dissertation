@@ -1,0 +1,17 @@
+research:
+  object: research:object
+  subject: research:subject
+  goal: research:goal
+  tasks: research:tasks
+  methods: research:methods
+  defense_statements: research:defense-statements
+  novelty: research:novelty
+  significance: research:significance
+  approbation: research:approbation
+  results: research:results
+
+chapters:
+  - {id: chapter:1, summary: abstract:chapter:1}
+  - {id: chapter:2, summary: abstract:chapter:2}
+  - {id: chapter:3, summary: abstract:chapter:3}
+  - {id: chapter:4, summary: abstract:chapter:4}
