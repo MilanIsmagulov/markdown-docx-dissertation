@@ -767,42 +767,62 @@ def _prepend_abstract_front_matter(document: Document, metadata: dict, abstract_
     specialty = metadata.get("specialty", {})
     supervisor = metadata.get("supervisor", {})
     defense = abstract_config.get("defense", {})
+    layout = abstract_config.get("layout", {})
+    spacing = layout.get("title_spacing", {})
+    title_size = _number(layout.get("title_font_size", "11pt"), "pt")
+    verso_size = _number(layout.get("verso_font_size", "10pt"), "pt")
     body = document._element.body
     template = body.sectPr
     elements = []
 
-    def add(text, alignment=WD_ALIGN_PARAGRAPH.CENTER, bold=False, before=0, after=6, size=12):
+    def add(text, alignment=WD_ALIGN_PARAGRAPH.CENTER, bold=False, before=0, after=6, size=None):
         paragraph = _add_title_paragraph(
             document, str(text), alignment=alignment, bold=bold, before=before, after=after,
-            line_spacing=1.0, size=size,
+            line_spacing=1.0, size=title_size if size is None else size,
         )
         elements.append(paragraph)
         return paragraph
 
-    add("На правах рукописи", WD_ALIGN_PARAGRAPH.RIGHT, after=24)
-    add(metadata.get("author", {}).get("full_name", ""), bold=True, after=36)
-    add(metadata.get("title", "").upper(), bold=True, after=30)
-    add(f"{specialty.get('code', '')} – {specialty.get('name', '')}", bold=True, after=30)
-    add("АВТОРЕФЕРАТ", bold=True, before=12, after=0)
-    add(f"диссертации на соискание ученой степени {metadata.get('degree', '')}", bold=True)
-    first_last = add(f"{metadata.get('city', '')} – {metadata.get('year', '')}", bold=True, before=54)
+    add("На правах рукописи", WD_ALIGN_PARAGRAPH.RIGHT,
+        after=_number(spacing.get("manuscript_after", "36pt"), "pt"))
+    add(metadata.get("author", {}).get("full_name", "").upper(), bold=True,
+        after=_number(spacing.get("author_after", "54pt"), "pt"))
+    add(metadata.get("title", "").upper(), bold=True,
+        after=_number(spacing.get("title_after", "48pt"), "pt"))
+    add(f"{specialty.get('code', '')} – {specialty.get('name', '')}", bold=True,
+        after=_number(spacing.get("specialty_after", "90pt"), "pt"))
+    add("АВТОРЕФЕРАТ", bold=True, after=0)
+    add(f"диссертации на соискание ученой степени\n{metadata.get('degree', '')}", bold=True,
+        after=_number(spacing.get("abstract_after", "30pt"), "pt"))
+    first_last = add(f"{metadata.get('city', '')} – {metadata.get('year', '')}", bold=True)
     _section_break_on(first_last, template)
 
-    add(f"Работа выполнена в {defense.get('organization', '[указать]')}", WD_ALIGN_PARAGRAPH.LEFT, after=18)
+    def add_verso(text, alignment=WD_ALIGN_PARAGRAPH.LEFT, bold=False, before=0, after=6):
+        return add(text, alignment, bold, before, after, verso_size)
+
+    organization = str(defense.get("organization", "[указать]"))
+    unit = str(defense.get("organization_unit", "")).strip()
+    add_verso(f"Работа выполнена в {organization}" + (f" в {unit}" if unit else ""), after=30)
     degree_title = ", ".join(item for item in (supervisor.get("degree", ""), supervisor.get("title", "")) if item)
-    add(f"Научный руководитель: {degree_title}\n{supervisor.get('full_name', '')}", WD_ALIGN_PARAGRAPH.LEFT, after=18)
+    add_verso(f"Научный руководитель:\t{degree_title}\n\t{supervisor.get('full_name', '').upper()}", after=24)
     opponents = defense.get("opponents", [])
-    add("Официальные оппоненты:\n" + "\n".join(str(item) for item in opponents), WD_ALIGN_PARAGRAPH.LEFT, after=18)
-    add(f"Ведущая организация: {defense.get('leading_organization', '[указать]')}", WD_ALIGN_PARAGRAPH.LEFT, after=18)
-    add(
+    add_verso("Официальные оппоненты:\t" + "\n\t".join(str(item) for item in opponents), after=24)
+    add_verso(f"Ведущая организация:\t{defense.get('leading_organization', '[указать]')}", after=54)
+    add_verso(
         f"Защита состоится {defense.get('date', '[указать]')} в {defense.get('time', '[указать]')} "
         f"на заседании диссертационного совета {defense.get('council', '[указать]')} по адресу: "
         f"{defense.get('address', '[указать]')}.",
-        WD_ALIGN_PARAGRAPH.LEFT, after=12,
+        after=12,
     )
-    add("С диссертацией можно ознакомиться в библиотеке и на официальном сайте организации.", WD_ALIGN_PARAGRAPH.LEFT)
-    add(f"Автореферат разослан {defense.get('mailing_date', '[указать]')}.", WD_ALIGN_PARAGRAPH.LEFT, before=12)
-    second_last = add(f"Учёный секретарь диссертационного совета\n{defense.get('secretary', '[указать]')}", WD_ALIGN_PARAGRAPH.LEFT, before=18)
+    add_verso(
+        f"С диссертацией можно ознакомиться в {defense.get('library', '[указать библиотеку]')} "
+        f"и на сайте {defense.get('website', '[указать адрес сайта]')}.", after=30,
+    )
+    add_verso(f"Автореферат разослан {defense.get('mailing_date', '[указать]')}.", after=30)
+    second_last = add_verso(
+        "Учёный секретарь\nдиссертационного совета\n"
+        f"{defense.get('secretary_degree', '[указать степень]')}\t{defense.get('secretary', '[указать]')}",
+    )
     _section_break_on(second_last, template)
 
     title_pg = template.find(qn("w:titlePg"))
@@ -990,12 +1010,16 @@ def render_docx(
         styles["body"]["line_spacing"] = layout.get("line_spacing", 1.0)
         styles["body"]["first_line_indent"] = layout.get("first_line_indent", "10mm")
         for heading in styles["headings"].values():
-            heading["font"]["size"] = "12pt"
+            heading["font"]["size"] = layout.get("font_size", "11pt")
     document = Document(output_path)
     page = styles["document"]
     for section in document.sections:
-        section.page_width = Mm(210)
-        section.page_height = Mm(297)
+        if document_kind == "abstract" and str(abstract_config.get("layout", {}).get("page_size", "A5")).casefold() == "a5":
+            section.page_width = Mm(148)
+            section.page_height = Mm(210)
+        else:
+            section.page_width = Mm(210)
+            section.page_height = Mm(297)
         section.left_margin = Mm(_number(page["margins"]["left"], "mm"))
         section.right_margin = Mm(_number(page["margins"]["right"], "mm"))
         section.top_margin = Mm(_number(page["margins"]["top"], "mm"))

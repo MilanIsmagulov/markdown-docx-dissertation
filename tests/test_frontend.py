@@ -398,6 +398,23 @@ def test_abstract_front_matter_has_two_unnumbered_sections_and_restarts_at_one()
     assert document.sections[2]._sectPr.xpath("./w:pgNumType/@w:start") == ["1"]
 
 
+def test_abstract_front_matter_uses_configured_font_sizes() -> None:
+    document = Document()
+    document.add_paragraph("Body")
+    metadata = {
+        "title": "Title", "degree": "Degree", "author": {"full_name": "Author"},
+        "specialty": {"code": "2.3.1", "name": "Specialty"},
+        "supervisor": {"full_name": "Supervisor", "degree": "Degree", "title": "Title"},
+        "city": "City", "year": 2026,
+    }
+    config = {"layout": {"title_font_size": "11pt", "verso_font_size": "10pt"}, "defense": {}}
+
+    _prepend_abstract_front_matter(document, metadata, config)
+
+    assert document.paragraphs[0].runs[0].font.size.pt == 11
+    assert document.paragraphs[7].runs[0].font.size.pt == 10
+
+
 def test_validator_reports_missing_pdf_asset(tmp_path: Path) -> None:
     root = write_note(tmp_path, "root.md", "![[assets/missing.pdf]]\n")
     diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
