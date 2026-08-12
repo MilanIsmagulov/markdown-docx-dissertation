@@ -406,7 +406,10 @@ def test_abstract_front_matter_uses_configured_font_sizes() -> None:
         "supervisor": {"full_name": "Supervisor", "degree": "Degree", "title": "Title"},
         "city": "City", "year": 2026,
     }
-    config = {"layout": {"title_font_size": "11pt", "verso_font_size": "10pt"}, "defense": {}}
+    config = {
+        "layout": {"title_font_size": "11pt", "verso_font_size": "10pt"},
+        "defense": {"opponents": [{"degree": "Degree", "full_name": "ИВАНОВ Иван Иванович"}]},
+    }
 
     _prepend_abstract_front_matter(document, metadata, config)
 
@@ -415,6 +418,7 @@ def test_abstract_front_matter_uses_configured_font_sizes() -> None:
     assert verso_runs
     assert all(run.font.size is None or run.font.size.pt == 10 for run in verso_runs)
     assert any(run.text == "SUPERVISOR" and run.bold for run in verso_runs)
+    assert any(run.text.endswith("ИВАНОВ Иван Иванович") and run.bold for run in verso_runs)
     assert not document.tables
 
 

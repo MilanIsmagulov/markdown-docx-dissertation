@@ -845,7 +845,7 @@ def _prepend_abstract_front_matter(document: Document, metadata: dict, abstract_
             degree, name = str(opponent), ""
         label = "Официальные оппоненты:" if index == 0 else ""
         add_tabbed([(label, False), ("\t" + degree, False)])
-        add_tabbed([("\t" + name, False)], after=36 if index == 0 else 30)
+        add_tabbed([("\t" + name, True)], after=36 if index == 0 else 30)
 
     add_tabbed([
         ("Ведущая организация:", False),
@@ -1108,6 +1108,16 @@ def render_docx(
     for paragraph in document.paragraphs:
         if paragraph._p.xpath(".//m:oMathPara"):
             paragraph.style = document.styles["Equation"]
+        introduction_labels = (
+            "Актуальность темы.", "Степень разработанности темы.",
+            "Цель и задачи исследования.", "Объект и предмет исследования.",
+            "Методы исследования.", "Научная новизна.",
+            "Теоретическая и практическая значимость.",
+            "Положения, выносимые на защиту.", "Степень достоверности результатов.",
+            "Апробация результатов.",
+        )
+        if paragraph.text.strip().startswith(introduction_labels):
+            paragraph.paragraph_format.first_line_indent = body_first_line_indent
         if paragraph.style.name in {"Heading 1", "Heading 2", "Heading 3"}:
             for run in paragraph.runs:
                 run.font.name = body_family = styles["body"]["font"]["family"]
