@@ -249,6 +249,24 @@ def test_document_and_publication_statistics_are_expanded(tmp_path: Path) -> Non
     assert counts["publications"] == 2
 
 
+def test_conference_registry_generates_list_and_statistics(tmp_path: Path) -> None:
+    conferences = tmp_path / "conferences.bib"
+    conferences.write_text(
+        "@conference{event, title={Conference}, eventdate={2026-02-20}, "
+        "location={City}, talk={Report}, keywords={national}}",
+        encoding="utf-8",
+    )
+
+    result = process_assets(
+        "{{stat:conferences}} {{stat_phrase:conferences}}\n\n{{list:conferences}}",
+        tmp_path,
+        conferences_bibliography=conferences,
+    )
+
+    assert "1 1 мероприятие" in result
+    assert "- Conference (2026-02-20, City); доклад «Report»." in result
+
+
 def test_validator_checks_object_references_assets_and_citations(tmp_path: Path) -> None:
     root = write_note(
         tmp_path,

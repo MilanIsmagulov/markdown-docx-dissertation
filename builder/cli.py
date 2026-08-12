@@ -64,7 +64,7 @@ def validate(project_root: Path) -> int:
         print(f"ERROR E_CONFIG: {exc}")
         return 1
     index = build_index(project_root, config.content_dir)
-    diagnostics = validate_index(index, config.root_note, config.bibliography, config.publications_bibliography)
+    diagnostics = validate_index(index, config.root_note, config.bibliography, config.publications_bibliography, config.conferences_bibliography)
     for diagnostic in diagnostics:
         print(diagnostic.format(project_root))
     errors = sum(item.severity == "error" for item in diagnostics)
@@ -80,7 +80,7 @@ def assemble(project_root: Path) -> int:
         print(f"ERROR E_CONFIG: {exc}")
         return 1
     index = build_index(project_root, config.content_dir)
-    diagnostics = validate_index(index, config.root_note, config.bibliography, config.publications_bibliography)
+    diagnostics = validate_index(index, config.root_note, config.bibliography, config.publications_bibliography, config.conferences_bibliography)
     errors = [item for item in diagnostics if item.severity == "error"]
     if errors:
         for diagnostic in diagnostics:
@@ -97,6 +97,7 @@ def assemble(project_root: Path) -> int:
             config.content_dir,
             config.bibliography,
             config.publications_bibliography,
+            config.conferences_bibliography,
         )
     except ValueError as exc:
         print(f"ERROR E_ASSET: {exc}")

@@ -26,6 +26,7 @@ def validate_index(
     root_note: Path | None = None,
     bibliography: Path | None = None,
     publications_bibliography: Path | None = None,
+    conferences_bibliography: Path | None = None,
 ) -> list[Diagnostic]:
     diagnostics = list(index.diagnostics)
     if root_note is not None and not root_note.is_file():
@@ -85,10 +86,24 @@ def validate_index(
                     )
     diagnostics.extend(_validate_transclusion_cycles(index))
     diagnostics.extend(_validate_document_sources(index, bibliography, publications_bibliography))
+    diagnostics.extend(_validate_conferences(conferences_bibliography))
     diagnostics.extend(_validate_appendices(index))
     diagnostics.extend(_validate_sections(index))
     diagnostics.extend(_validate_semantic_sources(index))
     diagnostics.extend(_validate_reachability(index, root_note))
+    return diagnostics
+
+
+def _validate_conferences(path: Path | None) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    for entry in read_bib_entries(path):
+        if entry.entry_type != "conference":
+            diagnostics.append(Diagnostic("E_CONFERENCE_TYPE", f"conference entry '{entry.key}' must use @conference"))
+        missing = [name for name in ("title", "eventdate", "location", "talk") if not entry.fields.get(name)]
+        if missing:
+            diagnostics.append(
+                Diagnostic("E_CONFERENCE_FIELDS", f"conference '{entry.key}' is missing: {', '.join(missing)}")
+            )
     return diagnostics
 
 

@@ -17,6 +17,7 @@ REFERENCE_RE = re.compile(r"\{\{ref:(?P<kind>table|figure|equation):(?P<id>[A-Za
 NUMBER_RE = re.compile(r"\{\{number:(?P<kind>table|figure|equation):(?P<id>[A-Za-z0-9_.-]+)}}")
 OBJECT_LIST_RE = re.compile(r"\{\{list:(?P<kind>figures|tables)}}")
 TERMS_LIST_RE = re.compile(r"\{\{list:(?P<kind>abbreviations|symbols|glossary)}}")
+CONFERENCE_LIST_RE = re.compile(r"\{\{list:conferences}}")
 STAT_RE = re.compile(r"\{\{stat:(?P<name>[a-z_]+)}}")
 STAT_PHRASE_RE = re.compile(r"\{\{stat_phrase:(?P<name>[a-z_]+)}}")
 SECTION_RE = re.compile(r"\{\{section:(?P<name>[a-z][a-z0-9_-]*)}}")
@@ -113,6 +114,7 @@ def process_assets(
     content_dir: Path,
     bibliography: Path | None = None,
     publications_bibliography: Path | None = None,
+    conferences_bibliography: Path | None = None,
 ) -> str:
     lines = markdown.splitlines()
     counters = {"table": 0, "figure": 0, "equation": 0}
@@ -228,6 +230,22 @@ def process_assets(
         return _markdown_table(rows)
 
     assembled = TERMS_LIST_RE.sub(replace_terms, assembled)
+    conferences = sorted(
+        read_bib_entries(conferences_bibliography), key=lambda entry: entry.fields.get("eventdate", "")
+    )
+
+    def conference_item(entry) -> str:
+        fields = entry.fields
+        date = fields.get("eventdate", "").replace("/", " — ")
+        details = ", ".join(item for item in (date, fields.get("location", ""), fields.get("organizer", "")) if item)
+        text = f"{fields.get('title', entry.key)} ({details})"
+        if fields.get("talk"):
+            text += f"; доклад «{fields['talk']}»"
+        if fields.get("award"):
+            text += f"; {fields['award']}"
+        return f"- {text}."
+
+    assembled = CONFERENCE_LIST_RE.sub("\n".join(conference_item(entry) for entry in conferences), assembled)
     assembled = SECTION_RE.sub(lambda match: f"[[SECTION:{match['name']}]]", assembled)
 
     publication_stats = publication_counts(read_bib_entries(publications_bibliography))
@@ -237,6 +255,7 @@ def process_assets(
         "tables": len(labels_for_kind(labels, "table")),
         "appendices": len(re.findall(r"^#\s+ПРИЛОЖЕНИЕ\s+[А-Я]\b", assembled, re.MULTILINE)),
         "bibliography": len(read_bib_entries(bibliography)),
+        "conferences": len(conferences),
         **publication_stats,
     }
     nouns = {
@@ -245,6 +264,7 @@ def process_assets(
         "tables": ("таблица", "таблицы", "таблиц"),
         "appendices": ("приложение", "приложения", "приложений"),
         "bibliography": ("наименование", "наименования", "наименований"),
+        "conferences": ("мероприятие", "мероприятия", "мероприятий"),
         "publications": ("печатная работа", "печатные работы", "печатных работ"),
         "publications_vak": ("статья", "статьи", "статей"),
         "publications_scopus_wos": ("публикация", "публикации", "публикаций"),
