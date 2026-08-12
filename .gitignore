@@ -4,6 +4,7 @@ __pycache__/
 .vs/
 .vscode/
 .idea/
+.agents/
 *.py[cod]
 *.egg-info/
 build/*
