@@ -1,7 +1,41 @@
 __pycache__/
 .pytest_cache/
 .venv/
+.vs/
+.vscode/
+.idea/
 *.py[cod]
 *.egg-info/
 build/*
 !build/.gitkeep
+
+# Local/private dissertation data
+private/
+local/
+content-private/
+config/*.private.yaml
+config/*.local.yaml
+*.private.bib
+*.local.bib
+.env
+.env.*
+
+# Generated and archived documents
+/*.docx
+/*.pdf
+*.tmp
+*.bak
+*.old
+.old/
+old/
+
+# Obsidian machine-specific state (vault settings stay versioned)
+content/.obsidian/workspace.json
+content/.obsidian/workspace-mobile.json
+content/.obsidian/cache/
+content/.trash/
+
+# Office lock files and OS metadata
+~$*
+Thumbs.db
+Desktop.ini
