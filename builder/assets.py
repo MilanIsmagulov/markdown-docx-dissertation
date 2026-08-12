@@ -19,6 +19,7 @@ OBJECT_LIST_RE = re.compile(r"\{\{list:(?P<kind>figures|tables)}}")
 TERMS_LIST_RE = re.compile(r"\{\{list:(?P<kind>abbreviations|symbols|glossary)}}")
 STAT_RE = re.compile(r"\{\{stat:(?P<name>[a-z_]+)}}")
 STAT_PHRASE_RE = re.compile(r"\{\{stat_phrase:(?P<name>[a-z_]+)}}")
+SECTION_RE = re.compile(r"\{\{section:(?P<name>[a-z][a-z0-9_-]*)}}")
 CHAPTER_RE = re.compile(r"^#\s+Глава\s+(?P<number>\d+)\b", re.IGNORECASE)
 PDF_EMBED_RE = re.compile(
     r"^\s*!\[\[(?P<target>[^]|#]+\.pdf)(?:#page=(?P<page>\d+))?(?:\|(?P<width>\d+(?:\.\d+)?mm))?]]\s*$",
@@ -227,6 +228,7 @@ def process_assets(
         return _markdown_table(rows)
 
     assembled = TERMS_LIST_RE.sub(replace_terms, assembled)
+    assembled = SECTION_RE.sub(lambda match: f"[[SECTION:{match['name']}]]", assembled)
 
     publication_stats = publication_counts(read_bib_entries(publications_bibliography))
     stats = {

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 from docx import Document
+from docx.enum.section import WD_ORIENT, WD_SECTION
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.text import WD_BREAK
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
@@ -16,6 +17,9 @@ from docx.enum.style import WD_STYLE_TYPE
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Mm, Pt, RGBColor
+
+
+SECTION_MARKER_RE = re.compile(r"^\[\[SECTION:(?P<name>[a-z][a-z0-9_-]*)]]$")
 
 
 def _number(value: str, suffix: str) -> float:
@@ -573,6 +577,147 @@ def _format_pdf_page_breaks(document: Document) -> None:
         paragraph._element.getparent().remove(paragraph._element)
 
 
+def _load_section_profiles(project_root: Path, styles: dict) -> tuple[str, dict[str, dict]]:
+    path = project_root / "config" / "sections.yaml"
+    if path.is_file():
+        data = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    else:
+        data = {}
+    default_name = str(data.get("default", "dissertation"))
+    profiles = data.get("profiles", {})
+    if not isinstance(profiles, dict):
+        raise ValueError("sections.profiles must be a mapping")
+    if default_name not in profiles:
+        profiles[default_name] = {
+            "size": "A4",
+            "orientation": "portrait",
+            "margins": dict(styles["document"]["margins"]),
+        }
+    return default_name, profiles
+
+
+def _apply_section_geometry(section, profile: dict, *, first: bool) -> None:
+    if str(profile.get("size", "A4")).casefold() != "a4":
+        raise ValueError("only A4 section profiles are supported")
+    orientation = str(profile.get("orientation", "portrait")).casefold()
+    if orientation == "portrait":
+        section.orientation = WD_ORIENT.PORTRAIT
+        section.page_width, section.page_height = Mm(210), Mm(297)
+    elif orientation == "landscape":
+        section.orientation = WD_ORIENT.LANDSCAPE
+        section.page_width, section.page_height = Mm(297), Mm(210)
+    else:
+        raise ValueError(f"unsupported section orientation: {orientation}")
+    margins = profile.get("margins", {})
+    for name in ("left", "right", "top", "bottom"):
+        if name not in margins:
+            raise ValueError(f"section profile requires margins.{name}")
+        setattr(section, f"{name}_margin", Mm(_number(margins[name], "mm")))
+    section.start_type = WD_SECTION.NEW_PAGE
+    section.different_first_page_header_footer = first
+
+
+def _apply_section_profiles(document: Document, project_root: Path, styles: dict) -> None:
+    default_name, profiles = _load_section_profiles(project_root, styles)
+    active_names = [default_name]
+    paragraphs = list(document.paragraphs)
+    for index, marker in enumerate(paragraphs):
+        match = SECTION_MARKER_RE.match(marker.text.strip())
+        if match is None:
+            continue
+        profile_name = match["name"]
+        if profile_name not in profiles:
+            raise ValueError(f"unknown section profile: {profile_name}")
+        previous = next((item for item in reversed(paragraphs[:index]) if item._element.getparent() is not None), None)
+        if previous is None:
+            raise ValueError("a section marker must follow document content")
+        ppr = previous._p.get_or_add_pPr()
+        old = ppr.find(qn("w:sectPr"))
+        if old is not None:
+            ppr.remove(old)
+        ppr.append(deepcopy(document._element.body.sectPr))
+        marker._element.getparent().remove(marker._element)
+        active_names.append(profile_name)
+    sections = list(document.sections)
+    if len(sections) != len(active_names):
+        raise ValueError("section marker conversion produced an inconsistent DOCX")
+    for index, (section, name) in enumerate(zip(sections, active_names)):
+        _apply_section_geometry(section, profiles[name], first=index == 0)
+        # Word requires header/footer references to precede other section
+        # properties and is sensitive to their canonical type order.
+        sect_pr = section._sectPr
+        references = list(sect_pr.findall(qn("w:headerReference"))) + list(
+            sect_pr.findall(qn("w:footerReference"))
+        )
+        order = {"default": 0, "even": 1, "first": 2}
+        references.sort(
+            key=lambda item: (
+                0 if item.tag == qn("w:headerReference") else 1,
+                order.get(item.get(qn("w:type"), "default"), 9),
+            )
+        )
+        for item in references:
+            sect_pr.remove(item)
+        for item in reversed(references):
+            sect_pr.insert(0, item)
+
+
+def _body_section_indexes(document: Document) -> dict[object, int]:
+    indexes: dict[object, int] = {}
+    section_index = 0
+    for child in document._element.body.iterchildren():
+        indexes[child] = section_index
+        if child.find("./w:pPr/w:sectPr", namespaces=child.nsmap) is not None:
+            section_index += 1
+    return indexes
+
+
+def _body_child(element, body):
+    current = element
+    while current is not None and current.getparent() is not body:
+        current = current.getparent()
+    return current
+
+
+def _fit_objects_to_sections(document: Document) -> None:
+    body = document._element.body
+    indexes = _body_section_indexes(document)
+    sections = list(document.sections)
+    for shape in document.inline_shapes:
+        child = _body_child(shape._inline, body)
+        section = sections[indexes.get(child, 0)]
+        usable_width = section.page_width - section.left_margin - section.right_margin
+        usable_height = section.page_height - section.top_margin - section.bottom_margin
+        if not shape.width:
+            continue
+        ratio = shape.height / shape.width
+        target_width = usable_width
+        target_height = int(target_width * ratio)
+        if target_height > usable_height:
+            target_height = usable_height
+            target_width = int(target_height / ratio)
+        shape.width, shape.height = target_width, target_height
+    for table in document.tables:
+        child = _body_child(table._tbl, body)
+        section = sections[indexes.get(child, 0)]
+        usable_width = section.page_width - section.left_margin - section.right_margin
+        table_width = table._tbl.tblPr.find(qn("w:tblW"))
+        if table_width is not None:
+            table_width.set(qn("w:type"), "dxa")
+            table_width.set(qn("w:w"), str(int(usable_width / 635)))
+        if table.columns:
+            column_width = int(usable_width / len(table.columns))
+            for grid_column in table._tbl.tblGrid:
+                grid_column.set(qn("w:w"), str(int(column_width / 635)))
+            for row in table.rows:
+                for cell in row.cells:
+                    cell.width = column_width
+                    tc_width = cell._tc.get_or_add_tcPr().find(qn("w:tcW"))
+                    if tc_width is not None:
+                        tc_width.set(qn("w:type"), "dxa")
+                        tc_width.set(qn("w:w"), str(int(column_width / 635)))
+
+
 def _add_title_paragraph(
     document: Document,
     text: str,
@@ -806,6 +951,8 @@ def render_docx(
     _format_numbered_equations(document, styles)
     _install_cross_reference_fields(document)
     _format_pdf_page_breaks(document)
+    _apply_section_profiles(document, project_root, styles)
+    _fit_objects_to_sections(document)
     for paragraph in document.paragraphs:
         if paragraph._p.xpath(".//m:oMathPara"):
             paragraph.style = document.styles["Equation"]

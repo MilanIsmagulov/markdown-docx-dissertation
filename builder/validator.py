@@ -14,6 +14,7 @@ DIRECTIVE_BLOCK_RE = re.compile(r"^```(?P<kind>table|figure|equation)\s*\n(?P<bo
 OBJECT_REFERENCE_RE = re.compile(r"\{\{(?:ref|number):(?P<kind>table|figure|equation):(?P<id>[A-Za-z0-9_.-]+)}}")
 CITATION_RE = re.compile(r"(?<![\w@])@(?P<key>[A-Za-z0-9_:.+/-]+)")
 BIB_KEY_RE = re.compile(r"@[A-Za-z]+\s*\{\s*(?P<key>[^,\s]+)\s*,", re.IGNORECASE)
+SECTION_RE = re.compile(r"\{\{section:(?P<name>[a-z][a-z0-9_-]*)}}")
 
 
 def _heading_key(text: str) -> str:
@@ -85,7 +86,47 @@ def validate_index(
     diagnostics.extend(_validate_transclusion_cycles(index))
     diagnostics.extend(_validate_document_sources(index, bibliography, publications_bibliography))
     diagnostics.extend(_validate_appendices(index))
+    diagnostics.extend(_validate_sections(index))
     diagnostics.extend(_validate_reachability(index, root_note))
+    return diagnostics
+
+
+def _validate_sections(index: ProjectIndex) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    path = index.root / "config" / "sections.yaml"
+    if not path.is_file():
+        return diagnostics
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    except yaml.YAMLError as exc:
+        return [Diagnostic("E_SECTIONS_YAML", f"invalid sections configuration: {exc}")]
+    profiles = data.get("profiles", {})
+    if not isinstance(profiles, dict):
+        return [Diagnostic("E_SECTIONS_CONFIG", "sections.profiles must be a mapping")]
+    default_name = str(data.get("default", "")).strip()
+    if default_name not in profiles:
+        diagnostics.append(Diagnostic("E_SECTION_DEFAULT", f"default section profile does not exist: '{default_name}'"))
+    for name, profile in profiles.items():
+        if not isinstance(profile, dict):
+            diagnostics.append(Diagnostic("E_SECTION_PROFILE", f"section profile '{name}' must be a mapping"))
+            continue
+        if str(profile.get("size", "A4")).casefold() != "a4":
+            diagnostics.append(Diagnostic("E_SECTION_SIZE", f"section profile '{name}' must use A4"))
+        if str(profile.get("orientation", "portrait")).casefold() not in {"portrait", "landscape"}:
+            diagnostics.append(Diagnostic("E_SECTION_ORIENTATION", f"invalid orientation in section profile '{name}'"))
+        margins = profile.get("margins", {})
+        if not isinstance(margins, dict) or any(key not in margins for key in ("left", "right", "top", "bottom")):
+            diagnostics.append(Diagnostic("E_SECTION_MARGINS", f"section profile '{name}' requires all four margins"))
+    for note in index.notes:
+        for match in SECTION_RE.finditer(note.body):
+            if match["name"] not in profiles:
+                diagnostics.append(
+                    Diagnostic(
+                        "E_SECTION_UNKNOWN",
+                        f"unknown section profile '{match['name']}'",
+                        SourceLocation(note.path, _line_for_offset(note.body, match.start())),
+                    )
+                )
     return diagnostics
 
 

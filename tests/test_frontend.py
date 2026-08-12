@@ -10,12 +10,13 @@ from builder.validator import validate_index
 from builder.assembler import assemble_note
 from builder.assets import process_assets
 from builder import assets as assets_module
-from builder.docx_renderer import _install_cross_reference_fields, _set_font
+from builder.docx_renderer import _apply_section_profiles, _install_cross_reference_fields, _set_font
 from builder.config import load_document_config
 from builder.cli import archive_previous_versions, next_versioned_output
 from builder.bibliography import publication_counts, read_bib_entries
 from docx import Document
 from docx.oxml.ns import qn
+from docx.shared import Mm
 
 
 def write_note(root: Path, relative: str, text: str) -> Path:
@@ -295,6 +296,49 @@ def test_pdf_transclusion_is_validated_preserved_and_expanded(tmp_path: Path, mo
     assert "[[PDF_PAGE_BREAK]]" in expanded
     assert "page-2.png" in expanded
     assert "{width=175mm}" in expanded
+
+
+def test_section_profile_marker_is_preserved_for_docx_renderer(tmp_path: Path) -> None:
+    result = process_assets("{{section:appendix-wide}}\n\n# Appendix", tmp_path)
+
+    assert "[[SECTION:appendix-wide]]" in result
+
+
+def test_validator_reports_unknown_section_profile(tmp_path: Path) -> None:
+    root = write_note(tmp_path, "root.md", "{{section:missing}}\n")
+    sections = tmp_path / "config" / "sections.yaml"
+    sections.parent.mkdir(parents=True)
+    sections.write_text(
+        "default: dissertation\nprofiles:\n  dissertation:\n    size: A4\n"
+        "    orientation: portrait\n    margins: {left: 25mm, right: 10mm, top: 20mm, bottom: 20mm}\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
+
+    assert any(item.code == "E_SECTION_UNKNOWN" for item in diagnostics)
+
+
+def test_landscape_section_profile_creates_real_word_section(tmp_path: Path) -> None:
+    sections = tmp_path / "config" / "sections.yaml"
+    sections.parent.mkdir(parents=True)
+    sections.write_text(
+        "default: dissertation\nprofiles:\n"
+        "  dissertation:\n    margins: {left: 25mm, right: 10mm, top: 20mm, bottom: 20mm}\n"
+        "  landscape:\n    orientation: landscape\n"
+        "    margins: {left: 20mm, right: 10mm, top: 15mm, bottom: 15mm}\n",
+        encoding="utf-8",
+    )
+    document = Document()
+    document.add_paragraph("Portrait")
+    document.add_paragraph("[[SECTION:landscape]]")
+    document.add_paragraph("Landscape")
+
+    _apply_section_profiles(document, tmp_path, {"document": {"margins": {}}})
+
+    assert len(document.sections) == 2
+    assert round(document.sections[1].page_width / Mm(1)) == 297
+    assert round(document.sections[1].page_height / Mm(1)) == 210
 
 
 def test_validator_reports_missing_pdf_asset(tmp_path: Path) -> None:
