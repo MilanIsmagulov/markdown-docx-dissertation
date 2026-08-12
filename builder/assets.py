@@ -18,6 +18,7 @@ NUMBER_RE = re.compile(r"\{\{number:(?P<kind>table|figure|equation):(?P<id>[A-Za
 OBJECT_LIST_RE = re.compile(r"\{\{list:(?P<kind>figures|tables)}}")
 TERMS_LIST_RE = re.compile(r"\{\{list:(?P<kind>abbreviations|symbols|glossary)}}")
 CONFERENCE_LIST_RE = re.compile(r"\{\{list:conferences}}")
+PUBLICATION_LIST_RE = re.compile(r"\{\{list:publications}}")
 STAT_RE = re.compile(r"\{\{stat:(?P<name>[a-z_]+)}}")
 STAT_PHRASE_RE = re.compile(r"\{\{stat_phrase:(?P<name>[a-z_]+)}}")
 SECTION_RE = re.compile(r"\{\{section:(?P<name>[a-z][a-z0-9_-]*)}}")
@@ -115,6 +116,7 @@ def process_assets(
     bibliography: Path | None = None,
     publications_bibliography: Path | None = None,
     conferences_bibliography: Path | None = None,
+    statistics_override: dict[str, int] | None = None,
 ) -> str:
     lines = markdown.splitlines()
     counters = {"table": 0, "figure": 0, "equation": 0}
@@ -258,6 +260,7 @@ def process_assets(
         "conferences": len(conferences),
         **publication_stats,
     }
+    stats.update(statistics_override or {})
     nouns = {
         "chapters": ("глава", "главы", "глав"),
         "figures": ("рисунок", "рисунка", "рисунков"),
@@ -298,6 +301,40 @@ def process_assets(
         return str(stats[name])
 
     assembled = STAT_RE.sub(replace_stat, assembled)
+
+    def format_publication(entry) -> str:
+        fields = entry.fields
+        authors = fields.get("author", "").replace(" and ", ", ")
+        container = fields.get("journal") or fields.get("booktitle", "")
+        parts = [f"{authors}. {fields.get('title', entry.key)}", container, fields.get("year", "")]
+        if fields.get("volume"):
+            parts.append(f"Т. {fields['volume']}")
+        if fields.get("number"):
+            parts.append(f"№ {fields['number']}")
+        if fields.get("pages"):
+            parts.append(f"С. {fields['pages'].replace('--', '–')}")
+        if fields.get("doi"):
+            parts.append(f"DOI: {fields['doi']}")
+        return ". ".join(item.rstrip(".") for item in parts if item) + "."
+
+    publications = read_bib_entries(publications_bibliography)
+    groups = (
+        ("Публикации в изданиях, рекомендованных ВАК РФ", [e for e in publications if "vak" in e.keywords]),
+        ("Публикации в изданиях, индексируемых в Scopus и Web of Science", [e for e in publications if e.keywords & {"scopus", "wos", "web-of-science"}]),
+        ("Свидетельства и патенты", [e for e in publications if e.entry_type in {"software", "patent"}]),
+        ("Публикации в других изданиях", [e for e in publications if "other" in e.keywords]),
+    )
+    publication_lines = []
+    ordinal = 1
+    for title, entries in groups:
+        if not entries:
+            continue
+        publication_lines.extend((f"**{title}:**", ""))
+        for entry in entries:
+            publication_lines.append(f"{ordinal}. {format_publication(entry)}")
+            ordinal += 1
+        publication_lines.append("")
+    assembled = PUBLICATION_LIST_RE.sub("\n".join(publication_lines).strip(), assembled)
 
     def replace_reference(match: re.Match[str]) -> str:
         key = (match["kind"], match["id"])

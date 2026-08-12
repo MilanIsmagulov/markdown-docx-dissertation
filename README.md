@@ -13,6 +13,7 @@ python build.py scaffold
 python build.py validate
 python build.py assemble
 python build.py build
+python build.py build-abstract
 pytest
 ```
 
@@ -328,3 +329,15 @@ width: 150mm
 Маркер `{{list:conferences}}` формирует хронологический список мероприятий. Доступны также
 `{{stat:conferences}}` и склоняемый `{{stat_phrase:conferences}}`. Один общий файл апробации
 `content/_shared/research/Апробация.md` подключается и в диссертацию, и в автореферат.
+
+## Сборка автореферата
+
+Команда `python build.py build-abstract` собирает отдельный версионируемый DOCX из
+`content/80 Abstract/Автореферат.md`. Параметры служебного разворота и поля для сведений о
+защите находятся в `config/abstract.yaml`. Первые две физические страницы не нумеруются;
+основной текст начинается с номера 1. Оглавление в автореферат не добавляется.
+
+Текст краткого содержания глав хранится в `content/80 Abstract/Главы/`. Общие формулировки
+подключаются из `_shared`, апробация — из `conferences.bib`, а список публикаций — из
+`publications.bib`. Формулы, таблицы и рисунки, включённые в Markdown автореферата, получают
+собственную последовательную нумерацию независимо от диссертации.

@@ -1,0 +1,40 @@
+document:
+  root: content/80 Abstract/Автореферат.md
+  output: build/abstract-v0.docx
+  assembled_markdown: build/abstract-assembled.md
+
+layout:
+  page_size: A5
+  margins: {left: 15mm, right: 15mm, top: 15mm, bottom: 15mm}
+  font_size: 10pt
+  title_font_size: 11pt
+  verso_font_size: 10pt
+  line_spacing: 1.0
+  first_line_indent: 7.5mm
+  title_spacing:
+    manuscript_after: 36pt
+    author_after: 54pt
+    # Pandoc's Normal style contributes 12 pt of paragraph rhythm; these
+    # compensated values reproduce the reference DOCX's visible 48/90 pt gaps.
+    title_after: 36pt
+    specialty_after: 78pt
+    abstract_after: 114pt
+
+defense:
+  organization: ФГБОУ ВО «Название университета»
+  organization_unit: наименование структурного подразделения
+  opponents:
+    - degree: "канд. техн. наук, проф."
+      full_name: "ИВАНОВ Иван Иванович"
+    - degree: "д-р техн. наук, проф."
+      full_name: "ИВАНОВ Иван Иванович"
+  leading_organization: "[указать ведущую организацию]"
+  date: "«_____» _____________ 20__ г."
+  time: "_________"
+  council: "[указать шифр диссертационного совета]"
+  address: "[указать адрес защиты]"
+  library: "[указать библиотеку организации]"
+  website: "[указать адрес сайта]"
+  mailing_date: "«_____» _____________ 20__ г"
+  secretary: "[указать учёного секретаря]"
+  secretary_degree: "[указать учёную степень и звание]"

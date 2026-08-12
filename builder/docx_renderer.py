@@ -727,6 +727,7 @@ def _add_title_paragraph(
     before=0,
     after=0,
     line_spacing=1.5,
+    size=14,
 ):
     paragraph = document.add_paragraph()
     paragraph.alignment = alignment
@@ -737,7 +738,7 @@ def _add_title_paragraph(
     run = paragraph.add_run(text)
     run.bold = bold
     run.font.name = "Times New Roman"
-    run.font.size = Pt(14)
+    run.font.size = Pt(size)
     rpr = run._element.get_or_add_rPr()
     fonts = rpr.rFonts
     if fonts is None:
@@ -746,6 +747,74 @@ def _add_title_paragraph(
     for attribute in ("ascii", "hAnsi", "eastAsia", "cs"):
         fonts.set(qn(f"w:{attribute}"), "Times New Roman")
     return paragraph
+
+
+def _section_break_on(paragraph, template, *, hide_headers: bool = True) -> None:
+    sect_pr = deepcopy(template)
+    if hide_headers:
+        for tag in ("w:headerReference", "w:footerReference", "w:titlePg"):
+            for item in list(sect_pr.findall(qn(tag))):
+                sect_pr.remove(item)
+    section_type = sect_pr.find(qn("w:type"))
+    if section_type is None:
+        section_type = OxmlElement("w:type")
+        sect_pr.insert(0, section_type)
+    section_type.set(qn("w:val"), "nextPage")
+    paragraph._p.get_or_add_pPr().append(sect_pr)
+
+
+def _prepend_abstract_front_matter(document: Document, metadata: dict, abstract_config: dict) -> None:
+    specialty = metadata.get("specialty", {})
+    supervisor = metadata.get("supervisor", {})
+    defense = abstract_config.get("defense", {})
+    body = document._element.body
+    template = body.sectPr
+    elements = []
+
+    def add(text, alignment=WD_ALIGN_PARAGRAPH.CENTER, bold=False, before=0, after=6, size=12):
+        paragraph = _add_title_paragraph(
+            document, str(text), alignment=alignment, bold=bold, before=before, after=after,
+            line_spacing=1.0, size=size,
+        )
+        elements.append(paragraph)
+        return paragraph
+
+    add("На правах рукописи", WD_ALIGN_PARAGRAPH.RIGHT, after=24)
+    add(metadata.get("author", {}).get("full_name", ""), bold=True, after=36)
+    add(metadata.get("title", "").upper(), bold=True, after=30)
+    add(f"{specialty.get('code', '')} – {specialty.get('name', '')}", bold=True, after=30)
+    add("АВТОРЕФЕРАТ", bold=True, before=12, after=0)
+    add(f"диссертации на соискание ученой степени {metadata.get('degree', '')}", bold=True)
+    first_last = add(f"{metadata.get('city', '')} – {metadata.get('year', '')}", bold=True, before=54)
+    _section_break_on(first_last, template)
+
+    add(f"Работа выполнена в {defense.get('organization', '[указать]')}", WD_ALIGN_PARAGRAPH.LEFT, after=18)
+    degree_title = ", ".join(item for item in (supervisor.get("degree", ""), supervisor.get("title", "")) if item)
+    add(f"Научный руководитель: {degree_title}\n{supervisor.get('full_name', '')}", WD_ALIGN_PARAGRAPH.LEFT, after=18)
+    opponents = defense.get("opponents", [])
+    add("Официальные оппоненты:\n" + "\n".join(str(item) for item in opponents), WD_ALIGN_PARAGRAPH.LEFT, after=18)
+    add(f"Ведущая организация: {defense.get('leading_organization', '[указать]')}", WD_ALIGN_PARAGRAPH.LEFT, after=18)
+    add(
+        f"Защита состоится {defense.get('date', '[указать]')} в {defense.get('time', '[указать]')} "
+        f"на заседании диссертационного совета {defense.get('council', '[указать]')} по адресу: "
+        f"{defense.get('address', '[указать]')}.",
+        WD_ALIGN_PARAGRAPH.LEFT, after=12,
+    )
+    add("С диссертацией можно ознакомиться в библиотеке и на официальном сайте организации.", WD_ALIGN_PARAGRAPH.LEFT)
+    add(f"Автореферат разослан {defense.get('mailing_date', '[указать]')}.", WD_ALIGN_PARAGRAPH.LEFT, before=12)
+    second_last = add(f"Учёный секретарь диссертационного совета\n{defense.get('secretary', '[указать]')}", WD_ALIGN_PARAGRAPH.LEFT, before=18)
+    _section_break_on(second_last, template)
+
+    title_pg = template.find(qn("w:titlePg"))
+    if title_pg is not None:
+        template.remove(title_pg)
+    pg_num = template.find(qn("w:pgNumType"))
+    if pg_num is None:
+        pg_num = OxmlElement("w:pgNumType")
+        template.append(pg_num)
+    pg_num.set(qn("w:start"), "1")
+    for index, paragraph in enumerate(elements):
+        body.insert(index, paragraph._p)
 
 
 def _prepend_title_page(document: Document, metadata: dict) -> None:
@@ -881,6 +950,7 @@ def render_docx(
     publications_bibliography: Path | None = None,
     csl: Path | None = None,
     bibliography_title: str = "СПИСОК ЛИТЕРАТУРЫ",
+    document_kind: str = "dissertation",
 ) -> Path:
     pandoc = shutil.which("pandoc")
     if pandoc is None:
@@ -891,11 +961,10 @@ def render_docx(
             str(markdown_path),
             "--from=markdown+tex_math_dollars",
             "--to=docx",
-            "--toc",
-            "--toc-depth=3",
             "--metadata=lang:ru-RU",
-            "--metadata=toc-title:ОГЛАВЛЕНИЕ",
     ]
+    if document_kind == "dissertation":
+        command.extend(["--toc", "--toc-depth=3", "--metadata=toc-title:ОГЛАВЛЕНИЕ"])
     bibliographies = [path for path in (bibliography, publications_bibliography) if path is not None]
     if bibliographies:
         command.append("--citeproc")
@@ -912,6 +981,16 @@ def render_docx(
     )
     styles = yaml.safe_load((project_root / "config" / "styles.yaml").read_text(encoding="utf-8-sig"))
     metadata = yaml.safe_load((project_root / "config" / "metadata.yaml").read_text(encoding="utf-8-sig")) or {}
+    abstract_config = {}
+    if document_kind == "abstract":
+        abstract_config = yaml.safe_load((project_root / "config" / "abstract.yaml").read_text(encoding="utf-8-sig")) or {}
+        layout = abstract_config.get("layout", {})
+        styles["document"]["margins"] = layout.get("margins", styles["document"]["margins"])
+        styles["body"]["font"]["size"] = layout.get("font_size", "12pt")
+        styles["body"]["line_spacing"] = layout.get("line_spacing", 1.0)
+        styles["body"]["first_line_indent"] = layout.get("first_line_indent", "10mm")
+        for heading in styles["headings"].values():
+            heading["font"]["size"] = "12pt"
     document = Document(output_path)
     page = styles["document"]
     for section in document.sections:
@@ -945,13 +1024,17 @@ def render_docx(
         # the inherited chapter page break here avoids an empty page between
         # the TOC and chapter 1 while later chapters still start on new pages.
         first_chapter.paragraph_format.page_break_before = False
-    _prepend_title_page(document, metadata)
+    if document_kind == "abstract":
+        _prepend_abstract_front_matter(document, metadata, abstract_config)
+    else:
+        _prepend_title_page(document, metadata)
     _request_field_updates(document)
     _format_numbered_objects(document, styles)
     _format_numbered_equations(document, styles)
     _install_cross_reference_fields(document)
     _format_pdf_page_breaks(document)
-    _apply_section_profiles(document, project_root, styles)
+    if document_kind == "dissertation":
+        _apply_section_profiles(document, project_root, styles)
     _fit_objects_to_sections(document)
     for paragraph in document.paragraphs:
         if paragraph._p.xpath(".//m:oMathPara"):
@@ -968,7 +1051,7 @@ def render_docx(
                     fonts.set(qn(f"w:{attribute}"), body_family)
                 for attribute in ("asciiTheme", "hAnsiTheme", "eastAsiaTheme", "cstheme"):
                     fonts.attrib.pop(qn(f"w:{attribute}"), None)
-    document.core_properties.title = "Демонстрационная сборка диссертации"
+    document.core_properties.title = "Автореферат" if document_kind == "abstract" else "Демонстрационная сборка диссертации"
     document.core_properties.subject = "Markdown to DOCX compiler preview"
     document.save(output_path)
     return output_path

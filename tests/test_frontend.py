@@ -10,7 +10,12 @@ from builder.validator import validate_index
 from builder.assembler import assemble_note
 from builder.assets import process_assets
 from builder import assets as assets_module
-from builder.docx_renderer import _apply_section_profiles, _install_cross_reference_fields, _set_font
+from builder.docx_renderer import (
+    _apply_section_profiles,
+    _install_cross_reference_fields,
+    _prepend_abstract_front_matter,
+    _set_font,
+)
 from builder.config import load_document_config
 from builder.cli import archive_previous_versions, next_versioned_output
 from builder.bibliography import publication_counts, read_bib_entries
@@ -370,6 +375,27 @@ def test_validator_reports_missing_semantic_source(tmp_path: Path) -> None:
     diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
 
     assert any(item.code == "E_SEMANTIC_SOURCE_MISSING" for item in diagnostics)
+
+
+def test_abstract_front_matter_has_two_unnumbered_sections_and_restarts_at_one() -> None:
+    document = Document()
+    document.add_paragraph("Body")
+    metadata = {
+        "title": "Title",
+        "degree": "кандидата технических наук",
+        "author": {"full_name": "Author"},
+        "specialty": {"code": "2.3.1", "name": "Specialty"},
+        "supervisor": {"full_name": "Supervisor", "degree": "д.т.н.", "title": "профессор"},
+        "city": "City",
+        "year": 2026,
+    }
+
+    _prepend_abstract_front_matter(document, metadata, {"defense": {}})
+
+    assert len(document.sections) == 3
+    assert not document.sections[0]._sectPr.xpath("./w:headerReference")
+    assert not document.sections[1]._sectPr.xpath("./w:headerReference")
+    assert document.sections[2]._sectPr.xpath("./w:pgNumType/@w:start") == ["1"]
 
 
 def test_validator_reports_missing_pdf_asset(tmp_path: Path) -> None:
