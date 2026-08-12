@@ -778,6 +778,7 @@ def _prepend_abstract_front_matter(document: Document, metadata: dict, abstract_
     defense = abstract_config.get("defense", {})
     layout = abstract_config.get("layout", {})
     spacing = layout.get("title_spacing", {})
+    verso_spacing = layout.get("verso_spacing", {})
     title_size = _number(layout.get("title_font_size", "11pt"), "pt")
     verso_size = _number(layout.get("verso_font_size", "10pt"), "pt")
     body = document._element.body
@@ -803,12 +804,52 @@ def _prepend_abstract_front_matter(document: Document, metadata: dict, abstract_
     def add_verso(text, alignment=WD_ALIGN_PARAGRAPH.JUSTIFY, after=0):
         return add(text, alignment=alignment, after=after, size=verso_size)
 
-    def add_tabbed(parts, *, tab_mm=50.01, after=0):
-        paragraph = add_verso("", after=after)
-        paragraph.paragraph_format.tab_stops.add_tab_stop(Mm(tab_mm))
-        for text, bold in parts:
-            set_run(paragraph.add_run(text), bold=bold)
+    def format_verso_paragraph(paragraph, *, alignment=WD_ALIGN_PARAGRAPH.LEFT, after=0):
+        paragraph.alignment = alignment
+        paragraph.paragraph_format.first_line_indent = Mm(0)
+        paragraph.paragraph_format.left_indent = Mm(0)
+        paragraph.paragraph_format.right_indent = Mm(0)
+        paragraph.paragraph_format.line_spacing = 1.0
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(after)
         return paragraph
+
+    def clear_cell(cell):
+        paragraph = cell.paragraphs[0]
+        paragraph.clear()
+        return format_verso_paragraph(paragraph)
+
+    def add_cell_line(cell, text, *, bold=False, after=0, alignment=WD_ALIGN_PARAGRAPH.LEFT):
+        paragraph = clear_cell(cell) if not any(p.text for p in cell.paragraphs) else cell.add_paragraph()
+        format_verso_paragraph(paragraph, alignment=alignment, after=after)
+        set_run(paragraph.add_run(str(text)), bold=bold)
+        return paragraph
+
+    def set_cell_margins(cell, *, top=0, start=0, bottom=0, end=0):
+        tc_pr = cell._tc.get_or_add_tcPr()
+        margins = tc_pr.first_child_found_in("w:tcMar")
+        if margins is None:
+            margins = OxmlElement("w:tcMar")
+            tc_pr.append(margins)
+        for side, value in (("top", top), ("start", start), ("bottom", bottom), ("end", end)):
+            node = margins.find(qn(f"w:{side}"))
+            if node is None:
+                node = OxmlElement(f"w:{side}")
+                margins.append(node)
+            node.set(qn("w:w"), str(value))
+            node.set(qn("w:type"), "dxa")
+
+    def add_grid_row(table, *, left="", right="", merged=False, after=0,
+                     left_after=0, right_after=0,
+                     right_bold=False, alignment=WD_ALIGN_PARAGRAPH.LEFT):
+        cells = table.add_row().cells
+        if merged:
+            cell = cells[0].merge(cells[1])
+            add_cell_line(cell, left, after=after, alignment=alignment)
+        else:
+            add_cell_line(cells[0], left, after=left_after)
+            add_cell_line(cells[1], right, bold=right_bold, after=right_after)
+        return cells
 
     add("На правах рукописи", WD_ALIGN_PARAGRAPH.RIGHT,
         after=_number(spacing.get("manuscript_after", "36pt"), "pt"))
@@ -827,48 +868,132 @@ def _prepend_abstract_front_matter(document: Document, metadata: dict, abstract_
     first_last = add(f"{metadata.get('city', '')} – {metadata.get('year', '')}", bold=True)
     first_last.add_run().add_break(WD_BREAK.PAGE)
 
+    verso_table = document.add_table(rows=0, cols=2)
+    verso_table.style = None
+    verso_table.alignment = WD_TABLE_ALIGNMENT.LEFT
+    verso_table.autofit = False
+    table_width_twips = int(Mm(118).twips)
+    column_width = Mm(59)
+    table_properties = verso_table._tbl.tblPr
+    table_caption = OxmlElement("w:tblCaption")
+    table_caption.set(qn("w:val"), "abstract-layout")
+    table_properties.append(table_caption)
+    table_look = table_properties.find(qn("w:tblLook"))
+    if table_look is not None:
+        table_look.set(qn("w:firstRow"), "0")
+        table_look.set(qn("w:firstColumn"), "0")
+    table_width = table_properties.find(qn("w:tblW"))
+    if table_width is None:
+        table_width = OxmlElement("w:tblW")
+        table_properties.insert(0, table_width)
+    table_width.set(qn("w:type"), "dxa")
+    table_width.set(qn("w:w"), str(table_width_twips))
+    table_layout = table_properties.find(qn("w:tblLayout"))
+    if table_layout is None:
+        table_layout = OxmlElement("w:tblLayout")
+        table_properties.append(table_layout)
+    table_layout.set(qn("w:type"), "fixed")
+    borders = table_properties.find(qn("w:tblBorders"))
+    if borders is None:
+        borders = OxmlElement("w:tblBorders")
+        table_properties.append(borders)
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = OxmlElement(f"w:{edge}")
+        border.set(qn("w:val"), "nil")
+        borders.append(border)
+
     organization = str(defense.get("organization", "[указать]"))
     unit = str(defense.get("organization_unit", "")).strip()
-    add_verso(f"Работа выполнена в {organization}" + (f" в {unit}" if unit else ""), after=30)
+    add_grid_row(
+        verso_table,
+        left=f"Работа выполнена в {organization}" + (f" в {unit}" if unit else ""),
+        merged=True,
+        after=_number(verso_spacing.get("organization_after", "30pt"), "pt"),
+        alignment=WD_ALIGN_PARAGRAPH.JUSTIFY,
+    )
 
     supervisor_name = str(supervisor.get("full_name", ""))
     surname, _, rest = supervisor_name.partition(" ")
     degree_title = "д-р техн. наук, " + str(supervisor.get("title", "профессор"))
-    add_tabbed([("Научный руководитель:", False), ("\t" + degree_title, False)])
-    add_tabbed([("\t", False), (surname.upper() + (" " + rest if rest else ""), True)], after=24)
+    add_grid_row(verso_table, left="Научный руководитель:", right=degree_title)
+    supervisor_name_cells = add_grid_row(
+        verso_table,
+        left="",
+        right=surname.upper() + (" " + rest if rest else ""),
+        right_bold=True,
+    )
+    supervisor_name_cells[0].paragraphs[0].paragraph_format.space_after = Pt(
+        _number(verso_spacing.get("supervisor_after", "30pt"), "pt")
+    )
 
-    for index, opponent in enumerate(defense.get("opponents", [])):
+    opponents = defense.get("opponents", [])
+    opponent_rows = []
+    for index, opponent in enumerate(opponents):
         if isinstance(opponent, dict):
             degree = str(opponent.get("degree", ""))
             name = str(opponent.get("full_name", ""))
         else:
             degree, name = str(opponent), ""
-        label = "Официальные оппоненты:" if index == 0 else ""
-        add_tabbed([(label, False), ("\t" + degree, False)])
-        add_tabbed([("\t" + name, True)], after=36 if index == 0 else 30)
+        degree_cells = add_grid_row(
+            verso_table,
+            left="Официальные оппоненты:" if index == 0 else "",
+            right=degree,
+        )
+        name_cells = add_grid_row(verso_table, left="", right=name, right_bold=True)
+        opponent_rows.extend((degree_cells, name_cells))
+    if len(opponent_rows) > 1:
+        opponent_label = opponent_rows[0][0].merge(opponent_rows[-1][0])
+        for extra_paragraph in list(opponent_label.paragraphs)[1:]:
+            opponent_label._tc.remove(extra_paragraph._p)
+        opponent_label.paragraphs[0].paragraph_format.space_after = Pt(
+            _number(verso_spacing.get("opponents_after", "30pt"), "pt")
+        )
 
-    add_tabbed([
-        ("Ведущая организация:", False),
-        ("\t" + str(defense.get("leading_organization", "[указать]")), False),
-    ], after=72)
-    add_verso(
+    add_grid_row(
+        verso_table,
+        left="Ведущая организация:",
+        right=str(defense.get("leading_organization", "[указать]")),
+        left_after=_number(verso_spacing.get("leading_organization_after", "72pt"), "pt"),
+    )
+    add_grid_row(
+        verso_table, merged=True, alignment=WD_ALIGN_PARAGRAPH.JUSTIFY,
+        after=_number(verso_spacing.get("defense_after", "18pt"), "pt"),
+        left=(
         f"Защита диссертации состоится {defense.get('date', '[указать дату]')} в {defense.get('time', '[указать время]')} "
         f"на заседании диссертационного совета {defense.get('council', '[указать шифр]')} по адресу: "
-        f"{defense.get('address', '[указать адрес]')}.", after=18,
+        f"{defense.get('address', '[указать адрес]')}."
+        ),
     )
-    add_verso(
+    add_grid_row(
+        verso_table, merged=True, alignment=WD_ALIGN_PARAGRAPH.JUSTIFY,
+        after=_number(verso_spacing.get("access_after", "30pt"), "pt"),
+        left=(
         f"С диссертацией можно ознакомиться в {defense.get('library', '[указать библиотеку]')} "
-        f"и на сайте {defense.get('website', '[указать сайт]')}.", after=42,
+        f"и на сайте {defense.get('website', '[указать сайт]')}."
+        ),
     )
-    add("Автореферат разослан " + str(defense.get("mailing_date", "[указать дату]")) + ".",
-        WD_ALIGN_PARAGRAPH.CENTER, after=36, size=verso_size)
-    add_verso("Учёный секретарь")
-    add_verso("диссертационного совета")
-    second_last = add_tabbed([
-        (str(defense.get("secretary_degree", "[указать степень]")), False),
-        ("\t" + str(defense.get("secretary", "[указать секретаря]")), False),
-    ], tab_mm=92.52)
-    _section_break_on(second_last, template)
+    add_grid_row(
+        verso_table, merged=True, alignment=WD_ALIGN_PARAGRAPH.CENTER,
+        after=_number(verso_spacing.get("mailing_after", "18pt"), "pt"),
+        left="Автореферат разослан " + str(defense.get("mailing_date", "[указать дату]")),
+    )
+    secretary_cells = add_grid_row(verso_table, left="Учёный секретарь", right="")
+    add_cell_line(secretary_cells[0], "диссертационного совета")
+    add_cell_line(secretary_cells[0], str(defense.get("secretary_degree", "[указать степень]")))
+    secretary_cells[1].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.BOTTOM
+    add_cell_line(
+        secretary_cells[1], str(defense.get("secretary", "[указать секретаря]")),
+        alignment=WD_ALIGN_PARAGRAPH.RIGHT,
+    )
+    for row in verso_table.rows:
+        for index, cell in enumerate(row.cells):
+            cell.width = column_width
+            set_cell_margins(cell, start=108, end=108)
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
+    secretary_cells[1].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.BOTTOM
+    verso_end = document.add_paragraph()
+    format_verso_paragraph(verso_end)
+    _section_break_on(verso_end, template)
 
     title_pg = template.find(qn("w:titlePg"))
     if title_pg is not None:
@@ -880,6 +1005,8 @@ def _prepend_abstract_front_matter(document: Document, metadata: dict, abstract_
     pg_num.set(qn("w:start"), "1")
     for index, paragraph in enumerate(elements):
         body.insert(index, paragraph._p)
+    body.insert(len(elements), verso_table._tbl)
+    body.insert(len(elements) + 1, verso_end._p)
 
 
 def _prepend_title_page(document: Document, metadata: dict) -> None:

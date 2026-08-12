@@ -19,6 +19,14 @@ layout:
     title_after: 36pt
     specialty_after: 78pt
     abstract_after: 114pt
+  verso_spacing:
+    organization_after: 30pt
+    supervisor_after: 30pt
+    opponents_after: 30pt
+    leading_organization_after: 72pt
+    defense_after: 18pt
+    access_after: 30pt
+    mailing_after: 18pt
 
 defense:
   organization: ФГБОУ ВО «Название университета»

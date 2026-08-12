@@ -414,12 +414,30 @@ def test_abstract_front_matter_uses_configured_font_sizes() -> None:
     _prepend_abstract_front_matter(document, metadata, config)
 
     assert document.paragraphs[0].runs[0].font.size.pt == 11
-    verso_runs = [run for paragraph in document.paragraphs[9:] for run in paragraph.runs]
+    table = document.tables[0]
+    verso_runs = [
+        run
+        for row in table.rows
+        for cell in row.cells
+        for paragraph in cell.paragraphs
+        for run in paragraph.runs
+    ]
     assert verso_runs
     assert all(run.font.size is None or run.font.size.pt == 10 for run in verso_runs)
     assert any(run.text == "SUPERVISOR" and run.bold for run in verso_runs)
     assert any(run.text.endswith("ИВАНОВ Иван Иванович") and run.bold for run in verso_runs)
-    assert not document.tables
+    assert len(document.tables) == 1
+    assert len(table.columns) == 2
+    assert table.autofit is False
+    assert table._tbl.tblPr.xpath("./w:tblCaption/@w:val") == ["abstract-layout"]
+    assert "Научный руководитель:" in "\n".join(cell.text for cell in table.columns[0].cells)
+    assert "Официальные оппоненты:" in "\n".join(cell.text for cell in table.columns[0].cells)
+    assert any(
+        run.text.endswith("ИВАНОВ Иван Иванович") and run.bold
+        for row in table.rows for cell in row.cells for paragraph in cell.paragraphs for run in paragraph.runs
+    )
+    assert all(run.font.size.pt == 10 for run in verso_runs if run.text)
+    assert table.rows[0].cells[0].paragraphs[0].paragraph_format.space_after.pt == 30
 
 
 def test_validator_reports_missing_pdf_asset(tmp_path: Path) -> None:
