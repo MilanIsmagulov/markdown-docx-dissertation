@@ -448,6 +448,9 @@ def _format_numbered_objects(document: Document, styles: dict) -> None:
     for table in document.tables:
         if not table.rows or not table.columns:
             continue
+        caption = table._tbl.tblPr.find(qn("w:tblCaption"))
+        if caption is not None and caption.get(qn("w:val")) == "abstract-layout":
+            continue
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
         table.autofit = False
         table_properties = table._tbl.tblPr
@@ -461,6 +464,9 @@ def _format_numbered_objects(document: Document, styles: dict) -> None:
         if borders is None:
             borders = OxmlElement("w:tblBorders")
             table_properties.append(borders)
+        else:
+            for border in list(borders):
+                borders.remove(border)
         for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
             border = OxmlElement(f"w:{edge}")
             border.set(qn("w:val"), "single")
@@ -698,6 +704,9 @@ def _fit_objects_to_sections(document: Document) -> None:
             target_width = int(target_height / ratio)
         shape.width, shape.height = target_width, target_height
     for table in document.tables:
+        caption = table._tbl.tblPr.find(qn("w:tblCaption"))
+        if caption is not None and caption.get(qn("w:val")) == "abstract-layout":
+            continue
         child = _body_child(table._tbl, body)
         section = sections[indexes.get(child, 0)]
         usable_width = section.page_width - section.left_margin - section.right_margin
@@ -775,54 +784,90 @@ def _prepend_abstract_front_matter(document: Document, metadata: dict, abstract_
     template = body.sectPr
     elements = []
 
-    def add(text, alignment=WD_ALIGN_PARAGRAPH.CENTER, bold=False, before=0, after=6, size=None):
+    def add(text, alignment=WD_ALIGN_PARAGRAPH.CENTER, bold=False, after=0, size=None):
         paragraph = _add_title_paragraph(
-            document, str(text), alignment=alignment, bold=bold, before=before, after=after,
+            document, str(text), alignment=alignment, bold=bold, after=after,
             line_spacing=1.0, size=title_size if size is None else size,
         )
         elements.append(paragraph)
         return paragraph
 
+    def set_run(run, *, bold=False):
+        run.bold = bold
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(verso_size)
+        fonts = run._element.get_or_add_rPr().get_or_add_rFonts()
+        for attribute in ("ascii", "hAnsi", "eastAsia", "cs"):
+            fonts.set(qn(f"w:{attribute}"), "Times New Roman")
+
+    def add_verso(text, alignment=WD_ALIGN_PARAGRAPH.JUSTIFY, after=0):
+        return add(text, alignment=alignment, after=after, size=verso_size)
+
+    def add_tabbed(parts, *, tab_mm=50.01, after=0):
+        paragraph = add_verso("", after=after)
+        paragraph.paragraph_format.tab_stops.add_tab_stop(Mm(tab_mm))
+        for text, bold in parts:
+            set_run(paragraph.add_run(text), bold=bold)
+        return paragraph
+
     add("На правах рукописи", WD_ALIGN_PARAGRAPH.RIGHT,
         after=_number(spacing.get("manuscript_after", "36pt"), "pt"))
-    add(metadata.get("author", {}).get("full_name", "").upper(), bold=True,
+    author_name = str(metadata.get("author", {}).get("full_name", ""))
+    author_surname, _, author_rest = author_name.partition(" ")
+    add(author_surname.upper() + (" " + author_rest if author_rest else ""), bold=True,
         after=_number(spacing.get("author_after", "54pt"), "pt"))
     add(metadata.get("title", "").upper(), bold=True,
         after=_number(spacing.get("title_after", "48pt"), "pt"))
     add(f"{specialty.get('code', '')} – {specialty.get('name', '')}", bold=True,
         after=_number(spacing.get("specialty_after", "90pt"), "pt"))
-    add("АВТОРЕФЕРАТ", bold=True, after=0)
-    add(f"диссертации на соискание ученой степени\n{metadata.get('degree', '')}", bold=True,
-        after=_number(spacing.get("abstract_after", "30pt"), "pt"))
+    add("АВТОРЕФЕРАТ", bold=True)
+    add("диссертации на соискание ученой степени", bold=True)
+    add(metadata.get("degree", ""), bold=True,
+        after=_number(spacing.get("abstract_after", "114pt"), "pt"))
     first_last = add(f"{metadata.get('city', '')} – {metadata.get('year', '')}", bold=True)
-    _section_break_on(first_last, template)
-
-    def add_verso(text, alignment=WD_ALIGN_PARAGRAPH.LEFT, bold=False, before=0, after=6):
-        return add(text, alignment, bold, before, after, verso_size)
+    first_last.add_run().add_break(WD_BREAK.PAGE)
 
     organization = str(defense.get("organization", "[указать]"))
     unit = str(defense.get("organization_unit", "")).strip()
     add_verso(f"Работа выполнена в {organization}" + (f" в {unit}" if unit else ""), after=30)
-    degree_title = ", ".join(item for item in (supervisor.get("degree", ""), supervisor.get("title", "")) if item)
-    add_verso(f"Научный руководитель:\t{degree_title}\n\t{supervisor.get('full_name', '').upper()}", after=24)
-    opponents = defense.get("opponents", [])
-    add_verso("Официальные оппоненты:\t" + "\n\t".join(str(item) for item in opponents), after=24)
-    add_verso(f"Ведущая организация:\t{defense.get('leading_organization', '[указать]')}", after=54)
+
+    supervisor_name = str(supervisor.get("full_name", ""))
+    surname, _, rest = supervisor_name.partition(" ")
+    degree_title = "д-р техн. наук, " + str(supervisor.get("title", "профессор"))
+    add_tabbed([("Научный руководитель:", False), ("\t" + degree_title, False)])
+    add_tabbed([("\t", False), (surname.upper() + (" " + rest if rest else ""), True)], after=24)
+
+    for index, opponent in enumerate(defense.get("opponents", [])):
+        if isinstance(opponent, dict):
+            degree = str(opponent.get("degree", ""))
+            name = str(opponent.get("full_name", ""))
+        else:
+            degree, name = str(opponent), ""
+        label = "Официальные оппоненты:" if index == 0 else ""
+        add_tabbed([(label, False), ("\t" + degree, False)])
+        add_tabbed([("\t" + name, False)], after=36 if index == 0 else 30)
+
+    add_tabbed([
+        ("Ведущая организация:", False),
+        ("\t" + str(defense.get("leading_organization", "[указать]")), False),
+    ], after=72)
     add_verso(
-        f"Защита состоится {defense.get('date', '[указать]')} в {defense.get('time', '[указать]')} "
-        f"на заседании диссертационного совета {defense.get('council', '[указать]')} по адресу: "
-        f"{defense.get('address', '[указать]')}.",
-        after=12,
+        f"Защита диссертации состоится {defense.get('date', '[указать дату]')} в {defense.get('time', '[указать время]')} "
+        f"на заседании диссертационного совета {defense.get('council', '[указать шифр]')} по адресу: "
+        f"{defense.get('address', '[указать адрес]')}.", after=18,
     )
     add_verso(
         f"С диссертацией можно ознакомиться в {defense.get('library', '[указать библиотеку]')} "
-        f"и на сайте {defense.get('website', '[указать адрес сайта]')}.", after=30,
+        f"и на сайте {defense.get('website', '[указать сайт]')}.", after=42,
     )
-    add_verso(f"Автореферат разослан {defense.get('mailing_date', '[указать]')}.", after=30)
-    second_last = add_verso(
-        "Учёный секретарь\nдиссертационного совета\n"
-        f"{defense.get('secretary_degree', '[указать степень]')}\t{defense.get('secretary', '[указать]')}",
-    )
+    add("Автореферат разослан " + str(defense.get("mailing_date", "[указать дату]")) + ".",
+        WD_ALIGN_PARAGRAPH.CENTER, after=36, size=verso_size)
+    add_verso("Учёный секретарь")
+    add_verso("диссертационного совета")
+    second_last = add_tabbed([
+        (str(defense.get("secretary_degree", "[указать степень]")), False),
+        ("\t" + str(defense.get("secretary", "[указать секретаря]")), False),
+    ], tab_mm=92.52)
     _section_break_on(second_last, template)
 
     title_pg = template.find(qn("w:titlePg"))

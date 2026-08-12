@@ -392,10 +392,9 @@ def test_abstract_front_matter_has_two_unnumbered_sections_and_restarts_at_one()
 
     _prepend_abstract_front_matter(document, metadata, {"defense": {}})
 
-    assert len(document.sections) == 3
+    assert len(document.sections) == 2
     assert not document.sections[0]._sectPr.xpath("./w:headerReference")
-    assert not document.sections[1]._sectPr.xpath("./w:headerReference")
-    assert document.sections[2]._sectPr.xpath("./w:pgNumType/@w:start") == ["1"]
+    assert document.sections[1]._sectPr.xpath("./w:pgNumType/@w:start") == ["1"]
 
 
 def test_abstract_front_matter_uses_configured_font_sizes() -> None:
@@ -412,7 +411,11 @@ def test_abstract_front_matter_uses_configured_font_sizes() -> None:
     _prepend_abstract_front_matter(document, metadata, config)
 
     assert document.paragraphs[0].runs[0].font.size.pt == 11
-    assert document.paragraphs[7].runs[0].font.size.pt == 10
+    verso_runs = [run for paragraph in document.paragraphs[9:] for run in paragraph.runs]
+    assert verso_runs
+    assert all(run.font.size is None or run.font.size.pt == 10 for run in verso_runs)
+    assert any(run.text == "SUPERVISOR" and run.bold for run in verso_runs)
+    assert not document.tables
 
 
 def test_validator_reports_missing_pdf_asset(tmp_path: Path) -> None:
