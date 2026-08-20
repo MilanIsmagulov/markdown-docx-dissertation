@@ -98,6 +98,22 @@ def _abstract_validation_mode(abstract_data: dict, override: str | None = None) 
     return mode
 
 
+def _abstract_research_overrides(project_root: Path) -> dict[str, str]:
+    path = project_root / "config" / "research.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    research = data.get("research", {})
+    selections = data.get("abstract_sources", {})
+    if not isinstance(research, dict) or not isinstance(selections, dict):
+        raise ValueError("research and abstract_sources must be mappings")
+    overrides: dict[str, str] = {}
+    for role, selection in selections.items():
+        canonical = str(research.get(role, "")).strip()
+        selected = str(selection).strip()
+        if canonical and selected and selected.casefold() != "shared":
+            overrides[canonical.casefold()] = selected
+    return overrides
+
+
 def validate_abstract(project_root: Path, validation_mode: str | None = None) -> int:
     try:
         config = load_document_config(project_root)
@@ -237,7 +253,11 @@ def assemble_abstract(project_root: Path, validation_mode: str | None = None) ->
         return 1
     try:
         assembled = process_assets(
-            assemble_note(index, root_note), config.content_dir, config.bibliography,
+            assemble_note(
+                index, root_note,
+                source_overrides=_abstract_research_overrides(project_root),
+            ),
+            config.content_dir, config.bibliography,
             config.publications_bibliography, config.conferences_bibliography,
             statistics_override=stats,
             object_numbering=str(abstract_data.get("numbering", {}).get("objects", "global")),

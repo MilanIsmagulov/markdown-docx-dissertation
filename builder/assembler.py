@@ -32,7 +32,13 @@ def _section(note: Note, heading: str | None) -> str:
     return "\n".join(lines[start:end]).strip()
 
 
-def assemble_note(index: ProjectIndex, note: Note, heading: str | None = None, stack: tuple[Path, ...] = ()) -> str:
+def assemble_note(
+    index: ProjectIndex,
+    note: Note,
+    heading: str | None = None,
+    stack: tuple[Path, ...] = (),
+    source_overrides: dict[str, str] | None = None,
+) -> str:
     if note.path in stack:
         raise ValueError(f"transclusion cycle reaches {note.path}")
     source = _section(note, heading)
@@ -62,7 +68,12 @@ def assemble_note(index: ProjectIndex, note: Note, heading: str | None = None, s
             target, problem = index.resolve(link)
             if problem is not None or target is None:
                 raise ValueError(problem.message if problem else f"unresolved transclusion {link.raw}")
-            expanded.append(assemble_note(index, target, link.heading, (*stack, note.path)))
+            override = (source_overrides or {}).get((target.note_id or "").casefold())
+            if override:
+                target = index.by_id.get(override.casefold())
+                if target is None:
+                    raise ValueError(f"configured research source '{override}' does not exist")
+            expanded.append(assemble_note(index, target, link.heading, (*stack, note.path), source_overrides))
             cursor = match.end()
         if expanded:
             expanded.append(line[cursor:])

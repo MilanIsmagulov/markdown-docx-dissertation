@@ -1,4 +1,6 @@
 research:
+  relevance: research:relevance
+  prior_work: research:prior-work
   object: research:object
   subject: research:subject
   goal: research:goal
@@ -9,6 +11,14 @@ research:
   significance: research:significance
   approbation: research:approbation
   results: research:results
+  reliability: research:reliability
+
+# `shared` uses the canonical note above. A private project may instead specify
+# an id of a note with type `abstract-research-statement` for a shorter version.
+abstract_sources:
+  relevance: shared
+  prior_work: shared
+  reliability: shared
 
 chapters:
   - {id: chapter:1, summary: abstract:chapter:1}
