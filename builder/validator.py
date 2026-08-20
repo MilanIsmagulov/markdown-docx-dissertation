@@ -481,6 +481,8 @@ def _validate_document_sources(
                     diagnostics.append(Diagnostic("E_ASSET_MISSING", f"{kind} asset does not exist: '{source_value}'", location))
                 elif source.suffix.casefold() not in allowed_extensions[kind]:
                     diagnostics.append(Diagnostic("E_ASSET_TYPE", f"unsupported {kind} asset type: '{source.suffix}'", location))
+                if kind == "table":
+                    diagnostics.extend(_validate_table_config(config, source, location))
             elif not str(config.get("latex", "")).strip():
                 diagnostics.append(Diagnostic("E_EQUATION_EMPTY", f"equation '{object_id}' requires latex", location))
 
@@ -505,6 +507,88 @@ def _validate_document_sources(
             if report_unused_bibliography and key in {entry.key for entry in bibliography_entries}:
                 diagnostics.append(Diagnostic("W_BIB_UNUSED", f"bibliography entry '{key}' is not cited", severity="warning"))
         diagnostics.extend(_validate_bibliography_entries(all_entries))
+    return diagnostics
+
+
+def _validate_table_config(config: dict, source: Path, location: SourceLocation) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    if config.get("sheet") and source.suffix.casefold() != ".xlsx":
+        diagnostics.append(Diagnostic("E_TABLE_SHEET", "sheet can only be used with XLSX tables", location))
+    cell_range = config.get("range")
+    if cell_range:
+        try:
+            from openpyxl.utils.cell import range_boundaries
+
+            range_boundaries(str(cell_range))
+        except (TypeError, ValueError):
+            diagnostics.append(Diagnostic("E_TABLE_RANGE", f"invalid table range: '{cell_range}'", location))
+    widths = config.get("widths")
+    if widths is not None:
+        if not isinstance(widths, list) or not widths:
+            diagnostics.append(Diagnostic("E_TABLE_WIDTHS", "table widths must be a non-empty list", location))
+        else:
+            total = 0.0
+            for value in widths:
+                match = re.fullmatch(r"(\d+(?:\.\d+)?)mm", str(value).strip(), re.IGNORECASE)
+                if match is None or float(match.group(1)) <= 0:
+                    diagnostics.append(Diagnostic("E_TABLE_WIDTHS", f"invalid table column width: '{value}'", location))
+                elif match:
+                    total += float(match.group(1))
+            if total > 175 and str(config.get("section", "portrait")).casefold() == "portrait":
+                diagnostics.append(Diagnostic(
+                    "W_TABLE_WIDE", f"declared table width is {total:g} mm and exceeds the portrait text area",
+                    location, "warning", "Use section: auto or section: landscape.",
+                ))
+    align = config.get("align")
+    if align is not None and (
+        not isinstance(align, list)
+        or any(str(value).casefold() not in {"left", "center", "right", "justify"} for value in align)
+    ):
+        diagnostics.append(Diagnostic("E_TABLE_ALIGN", "table align must contain left, center, right or justify", location))
+    merges = config.get("merges")
+    if merges is not None and (
+        not isinstance(merges, list)
+        or any(re.fullmatch(r"[A-Z]+\d+:[A-Z]+\d+", str(value).upper()) is None for value in merges)
+    ):
+        diagnostics.append(Diagnostic("E_TABLE_MERGES", "table merges must use ranges such as A1:B1", location))
+    if "repeat_header" in config and not isinstance(config["repeat_header"], bool):
+        diagnostics.append(Diagnostic("E_TABLE_REPEAT_HEADER", "repeat_header must be true or false", location))
+    if "split_rows" in config and (
+        not isinstance(config["split_rows"], int) or isinstance(config["split_rows"], bool) or config["split_rows"] < 1
+    ):
+        diagnostics.append(Diagnostic("E_TABLE_SPLIT", "split_rows must be a positive integer", location))
+    if str(config.get("section", "portrait")).casefold() not in {"portrait", "auto", "landscape"}:
+        diagnostics.append(Diagnostic("E_TABLE_SECTION", "table section must be portrait, auto or landscape", location))
+    if source.is_file() and not any(item.code in {"E_TABLE_RANGE", "E_TABLE_WIDTHS", "E_TABLE_ALIGN", "E_TABLE_MERGES"} for item in diagnostics):
+        try:
+            from .assets import _read_rows
+
+            rows = _read_rows(
+                source,
+                str(config["sheet"]) if config.get("sheet") else None,
+                str(config["range"]) if config.get("range") else None,
+            )
+        except ValueError as exc:
+            diagnostics.append(Diagnostic("E_TABLE_IMPORT", str(exc), location))
+        else:
+            columns = max((len(row) for row in rows), default=0)
+            if widths is not None and len(widths) != columns:
+                diagnostics.append(Diagnostic(
+                    "E_TABLE_WIDTHS", f"table has {columns} columns but {len(widths)} widths were declared", location,
+                ))
+            if align is not None and len(align) != columns:
+                diagnostics.append(Diagnostic(
+                    "E_TABLE_ALIGN", f"table has {columns} columns but {len(align)} alignments were declared", location,
+                ))
+            if isinstance(merges, list):
+                from openpyxl.utils.cell import range_boundaries
+
+                for merged_range in merges:
+                    min_col, min_row, max_col, max_row = range_boundaries(str(merged_range))
+                    if min_col < 1 or min_row < 1 or max_col > columns or max_row > len(rows):
+                        diagnostics.append(Diagnostic(
+                            "E_TABLE_MERGES", f"merged range is outside the selected table: '{merged_range}'", location,
+                        ))
     return diagnostics
 
 

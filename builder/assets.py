@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import base64
+import json
 import re
 import shutil
 import subprocess
@@ -35,22 +37,66 @@ class ObjectNumber:
     number: str
 
 
-def _read_rows(path: Path, sheet: str | None) -> list[list[str]]:
+def _range_bounds(cell_range: str | None, rows: list[list[str]]) -> tuple[int, int, int, int]:
+    width = max((len(row) for row in rows), default=0)
+    if not cell_range:
+        return 1, 1, width, len(rows)
+    try:
+        from openpyxl.utils.cell import range_boundaries
+
+        min_col, min_row, max_col, max_row = range_boundaries(cell_range)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid table range: {cell_range}") from exc
+    return min_col, min_row, max_col, max_row
+
+
+def _slice_rows(rows: list[list[str]], cell_range: str | None) -> list[list[str]]:
+    min_col, min_row, max_col, max_row = _range_bounds(cell_range, rows)
+    return [
+        (row + [""] * max_col)[min_col - 1 : max_col]
+        for row in rows[min_row - 1 : max_row]
+    ]
+
+
+def _read_rows(path: Path, sheet: str | None, cell_range: str | None = None) -> list[list[str]]:
     if path.suffix.casefold() in {".csv", ".tsv"}:
         delimiter = "\t" if path.suffix.casefold() == ".tsv" else ","
         with path.open("r", encoding="utf-8-sig", newline="") as source:
-            return [[cell.strip() for cell in row] for row in csv.reader(source, delimiter=delimiter)]
+            rows = [[cell.strip() for cell in row] for row in csv.reader(source, delimiter=delimiter)]
+            return _slice_rows(rows, cell_range)
     if path.suffix.casefold() == ".xlsx":
         try:
             from openpyxl import load_workbook
         except ImportError as exc:
             raise ValueError("XLSX import requires the 'openpyxl' package") from exc
         workbook = load_workbook(path, read_only=True, data_only=True)
-        worksheet = workbook[sheet] if sheet else workbook.active
-        rows = [["" if value is None else str(value) for value in row] for row in worksheet.iter_rows(values_only=True)]
+        try:
+            worksheet = workbook[sheet] if sheet else workbook.active
+        except KeyError as exc:
+            workbook.close()
+            raise ValueError(f"XLSX sheet does not exist: {sheet}") from exc
+        iterator = worksheet[cell_range] if cell_range else worksheet.iter_rows()
+        rows = [["" if cell.value is None else str(cell.value) for cell in row] for row in iterator]
         workbook.close()
         return rows
     raise ValueError(f"unsupported table asset: {path.suffix}")
+
+
+def _table_config_marker(config: dict) -> str:
+    supported = {
+        key: config[key]
+        for key in ("widths", "align", "merges", "repeat_header")
+        if key in config
+    }
+    payload = json.dumps(supported, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return "[[TABLE_CONFIG:" + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=") + "]]"
+
+
+def _table_chunks(rows: list[list[str]], split_rows: int | None) -> list[list[list[str]]]:
+    if not split_rows or len(rows) <= split_rows + 1:
+        return [rows]
+    header, body = rows[0], rows[1:]
+    return [[header, *body[start : start + split_rows]] for start in range(0, len(body), split_rows)]
 
 
 def _escape_cell(value: str) -> str:
@@ -176,15 +222,43 @@ def process_assets(
             source = content_dir / str(config.get("source", ""))
             if not source.is_file():
                 raise ValueError(f"table asset not found: {source}")
-            rows = _read_rows(source, str(config["sheet"]) if config.get("sheet") else None)
-            output.extend(
-                (
-                    f"Таблица [[TARGET:{kind}:{object_id}:{marker_chapter}:{counters[kind]}]] – {caption}",
-                    "",
-                    _markdown_table(rows),
-                    "",
-                )
+            rows = _read_rows(
+                source,
+                str(config["sheet"]) if config.get("sheet") else None,
+                str(config["range"]) if config.get("range") else None,
             )
+            if not rows or not rows[0]:
+                raise ValueError("table asset contains no rows in the selected range")
+            split_rows_value = config.get("split_rows")
+            split_rows = int(split_rows_value) if split_rows_value is not None else None
+            chunks = _table_chunks(rows, split_rows)
+            widths = config.get("widths", [])
+            width_total = 0.0
+            if isinstance(widths, list):
+                for value in widths:
+                    match_width = re.fullmatch(r"(\d+(?:\.\d+)?)mm", str(value).strip(), re.IGNORECASE)
+                    if match_width:
+                        width_total += float(match_width.group(1))
+            section = str(config.get("section", "portrait")).casefold()
+            use_landscape = section == "landscape" or (
+                section == "auto" and (len(rows[0]) > 6 or width_total > 175)
+            )
+            if use_landscape:
+                output.extend(("[[SECTION:landscape]]", ""))
+            for chunk_index, chunk in enumerate(chunks):
+                if chunk_index == 0:
+                    table_caption = f"Таблица [[TARGET:{kind}:{object_id}:{marker_chapter}:{counters[kind]}]] – {caption}"
+                else:
+                    table_caption = f"Продолжение таблицы [[NUMBER:{kind}:{object_id}:{number}]]"
+                output.extend((table_caption, "", _table_config_marker(config), "", _markdown_table(chunk), ""))
+            note = str(config.get("note", "")).strip()
+            source_note = str(config.get("source_note", "")).strip()
+            if note:
+                output.extend((f"Примечание. {note}", ""))
+            if source_note:
+                output.extend((f"Источник: {source_note}", ""))
+            if use_landscape:
+                output.extend(("[[SECTION:dissertation]]", ""))
         elif kind == "figure":
             source = content_dir / str(config.get("source", ""))
             if not source.is_file():
