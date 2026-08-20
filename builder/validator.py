@@ -85,7 +85,14 @@ def validate_index(
                         )
                     )
     diagnostics.extend(_validate_transclusion_cycles(index))
-    diagnostics.extend(_validate_document_sources(index, bibliography, publications_bibliography))
+    diagnostics.extend(
+        _validate_document_sources(
+            index,
+            bibliography,
+            publications_bibliography,
+            notes=_reachable_notes(index, root_note),
+        )
+    )
     diagnostics.extend(_validate_conferences(conferences_bibliography))
     diagnostics.extend(_validate_appendices(index))
     diagnostics.extend(_validate_sections(index))
@@ -186,6 +193,7 @@ def _validate_document_sources(
     index: ProjectIndex,
     bibliography: Path | None,
     publications_bibliography: Path | None = None,
+    notes: list[Note] | None = None,
 ) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     objects: dict[tuple[str, str], SourceLocation] = {}
@@ -193,7 +201,7 @@ def _validate_document_sources(
     citations: dict[str, SourceLocation] = {}
     allowed_extensions = {"table": {".csv", ".tsv", ".xlsx"}, "figure": {".png", ".jpg", ".jpeg", ".svg"}}
 
-    for note in index.notes:
+    for note in index.notes if notes is None else notes:
         for match in DIRECTIVE_BLOCK_RE.finditer(note.body):
             location = SourceLocation(note.path, _line_for_offset(note.body, match.start()))
             try:
@@ -319,20 +327,7 @@ def _validate_reachability(index: ProjectIndex, root_note: Path | None) -> list[
     root = next((note for note in index.notes if note.path.resolve() == root_note.resolve()), None)
     if root is None:
         return []
-    reachable: set[Path] = set()
-
-    def visit(note: Note) -> None:
-        if note.path in reachable:
-            return
-        reachable.add(note.path)
-        for link in note.links:
-            if link.kind != "transclusion" or link.target.casefold().endswith(".pdf"):
-                continue
-            target, problem = index.resolve(link)
-            if target is not None and problem is None:
-                visit(target)
-
-    visit(root)
+    reachable = {note.path for note in _reachable_notes(index, root_note)}
     library_types = {"canonical-research-statement"}
     alternate_document_types = {"abstract", "chapter-summary"} if root.metadata.get("type") != "abstract" else {"document"}
     return [
@@ -342,6 +337,29 @@ def _validate_reachability(index: ProjectIndex, root_note: Path | None) -> list[
         and not note.path.name.startswith("_")
         and str(note.metadata.get("type", "")) not in library_types | alternate_document_types
     ]
+
+
+def _reachable_notes(index: ProjectIndex, root_note: Path | None) -> list[Note]:
+    if root_note is None or not root_note.is_file():
+        return list(index.notes)
+    root = next((note for note in index.notes if note.path.resolve() == root_note.resolve()), None)
+    if root is None:
+        return list(index.notes)
+    reachable: dict[Path, Note] = {}
+
+    def visit(note: Note) -> None:
+        if note.path in reachable:
+            return
+        reachable[note.path] = note
+        for link in note.links:
+            if link.kind != "transclusion" or link.target.casefold().endswith(".pdf"):
+                continue
+            target, problem = index.resolve(link)
+            if target is not None and problem is None:
+                visit(target)
+
+    visit(root)
+    return list(reachable.values())
 
 
 def _validate_transclusion_cycles(index: ProjectIndex) -> list[Diagnostic]:
