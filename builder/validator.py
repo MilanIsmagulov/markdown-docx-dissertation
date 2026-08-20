@@ -229,6 +229,42 @@ def _validate_abstract(index: ProjectIndex, root_note: Path | None, mode: str) -
     }
     expected_sources = set(expected_summaries)
     reachable = _reachable_notes(index, root_note)
+    research_roles = research.get("research", {})
+    abstract_sources = research.get("abstract_sources", {})
+    if not isinstance(research_roles, dict) or not isinstance(abstract_sources, dict):
+        diagnostics.append(Diagnostic("E_ABSTRACT_RESEARCH_CONFIG", "research and abstract_sources must be mappings"))
+        research_roles, abstract_sources = {}, {}
+    reachable_paths = {note.path for note in reachable}
+    for role, selection in abstract_sources.items():
+        canonical_id = str(research_roles.get(role, "")).strip()
+        if not canonical_id:
+            diagnostics.append(Diagnostic("E_ABSTRACT_RESEARCH_ROLE", f"unknown research role '{role}'"))
+            continue
+        canonical = index.by_id.get(canonical_id.casefold())
+        if canonical is not None and canonical.path not in reachable_paths:
+            diagnostics.append(
+                Diagnostic("E_ABSTRACT_RESEARCH_NOT_INCLUDED", f"research role '{role}' is not included in the abstract")
+            )
+        selected_id = canonical_id if str(selection).strip().casefold() == "shared" else str(selection).strip()
+        selected = index.by_id.get(selected_id.casefold())
+        if selected is None:
+            diagnostics.append(
+                Diagnostic(
+                    "E_ABSTRACT_RESEARCH_SOURCE_MISSING",
+                    f"abstract source for '{role}' does not exist: '{selected_id}'",
+                )
+            )
+            continue
+        allowed_types = {"canonical-research-statement"} if selected_id == canonical_id else {
+            "canonical-research-statement", "abstract-research-statement",
+        }
+        if str(selected.metadata.get("type", "")).casefold() not in allowed_types:
+            diagnostics.append(
+                Diagnostic(
+                    "E_ABSTRACT_RESEARCH_SOURCE_TYPE",
+                    f"abstract source '{selected_id}' has an unsupported note type",
+                )
+            )
     summaries = [note for note in reachable if str(note.metadata.get("type", "")).casefold() == "chapter-summary"]
     sources: dict[str, Note] = {}
     for summary in summaries:
@@ -345,9 +381,14 @@ def _validate_semantic_sources(index: ProjectIndex) -> list[Diagnostic]:
         diagnostics.append(Diagnostic("E_RESEARCH_CONFIG", "research registry must be a mapping"))
         return diagnostics
     for role, note_id in research.items():
-        if str(note_id).casefold() not in index.by_id:
+        note = index.by_id.get(str(note_id).casefold())
+        if note is None:
             diagnostics.append(
                 Diagnostic("E_RESEARCH_SOURCE_MISSING", f"research.{role} points to missing note '{note_id}'")
+            )
+        elif str(note.metadata.get("type", "")).casefold() != "canonical-research-statement":
+            diagnostics.append(
+                Diagnostic("E_RESEARCH_SOURCE_TYPE", f"research.{role} source '{note_id}' must have type 'canonical-research-statement'")
             )
     return diagnostics
 

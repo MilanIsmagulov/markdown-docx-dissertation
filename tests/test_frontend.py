@@ -451,6 +451,81 @@ def test_abstract_validator_applies_configured_public_denylist(tmp_path: Path) -
     assert any(item.code == "E_PUBLIC_DENYLIST" for item in diagnostics)
 
 
+def test_abstract_assembly_can_override_shared_research_source(tmp_path: Path) -> None:
+    root = write_note(
+        tmp_path, "abstract.md",
+        "---\ntype: abstract\n---\n\n**Актуальность.** ![[research:relevance]]\n",
+    )
+    write_note(
+        tmp_path, "shared.md",
+        "---\nid: research:relevance\ntype: canonical-research-statement\n---\n\nОбщий текст.\n",
+    )
+    write_note(
+        tmp_path, "short.md",
+        "---\nid: abstract:relevance\ntype: abstract-research-statement\n---\n\nКраткий текст.\n",
+    )
+    index = build_index(tmp_path, tmp_path / "content")
+    root_note = next(note for note in index.notes if note.path == root)
+
+    shared = assemble_note(index, root_note)
+    overridden = assemble_note(
+        index, root_note, source_overrides={"research:relevance": "abstract:relevance"},
+    )
+
+    assert "Общий текст." in shared
+    assert "Краткий текст." not in shared
+    assert "Краткий текст." in overridden
+    assert "Общий текст." not in overridden
+
+
+def test_abstract_validator_checks_selected_research_source_and_type(tmp_path: Path) -> None:
+    write_abstract_validation_config(tmp_path)
+    (tmp_path / "config" / "research.yaml").write_text(
+        "research:\n  relevance: research:relevance\n"
+        "abstract_sources:\n  relevance: abstract:relevance\n"
+        "chapters: []\n",
+        encoding="utf-8",
+    )
+    root = write_note(
+        tmp_path, "abstract.md",
+        "---\ntype: abstract\n---\n\n![[research:relevance]]\n",
+    )
+    write_note(
+        tmp_path, "shared.md",
+        "---\nid: research:relevance\ntype: canonical-research-statement\n---\n\nShared\n",
+    )
+    write_note(
+        tmp_path, "short.md",
+        "---\nid: abstract:relevance\ntype: chapter-summary\n---\n\nShort\n",
+    )
+
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
+
+    assert "E_ABSTRACT_RESEARCH_SOURCE_TYPE" in {item.code for item in diagnostics}
+
+
+def test_abstract_validator_reports_missing_or_unincluded_research_roles(tmp_path: Path) -> None:
+    write_abstract_validation_config(tmp_path)
+    (tmp_path / "config" / "research.yaml").write_text(
+        "research:\n  relevance: research:relevance\n  reliability: research:reliability\n"
+        "abstract_sources:\n  relevance: shared\n  reliability: abstract:missing\n"
+        "chapters: []\n",
+        encoding="utf-8",
+    )
+    root = write_note(tmp_path, "abstract.md", "---\ntype: abstract\n---\n\n![[research:relevance]]\n")
+    for role in ("relevance", "reliability"):
+        write_note(
+            tmp_path, f"{role}.md",
+            f"---\nid: research:{role}\ntype: canonical-research-statement\n---\n\nShared\n",
+        )
+
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
+    codes = {item.code for item in diagnostics}
+
+    assert "E_ABSTRACT_RESEARCH_NOT_INCLUDED" in codes
+    assert "E_ABSTRACT_RESEARCH_SOURCE_MISSING" in codes
+
+
 def test_asset_processor_expands_object_and_term_lists(tmp_path: Path) -> None:
     content = tmp_path / "content"
     content.mkdir()
