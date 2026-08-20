@@ -192,6 +192,24 @@ def _validate_abstract(index: ProjectIndex, root_note: Path | None, mode: str) -
         diagnostics.append(Diagnostic("E_ABSTRACT_VALIDATION_CONFIG", "allowed_placeholder_fields must be a list of strings"))
         allowed_placeholder_fields = []
     allowed_placeholder_fields = set(allowed_placeholder_fields)
+
+    publication_config = abstract.get("publications", {})
+    if not isinstance(publication_config, dict):
+        diagnostics.append(Diagnostic("E_ABSTRACT_PUBLICATION_CONFIG", "abstract.publications must be a mapping"))
+    else:
+        groups = publication_config.get("groups", [])
+        if not isinstance(groups, list):
+            diagnostics.append(Diagnostic("E_ABSTRACT_PUBLICATION_CONFIG", "abstract.publications.groups must be a list"))
+        else:
+            group_ids: set[str] = set()
+            for position, group in enumerate(groups, 1):
+                if not isinstance(group, dict) or not str(group.get("id", "")).strip() or not str(group.get("title", "")).strip():
+                    diagnostics.append(Diagnostic("E_ABSTRACT_PUBLICATION_CONFIG", f"publication group {position} requires id and title"))
+                    continue
+                group_id = str(group["id"]).strip().casefold()
+                if group_id in group_ids:
+                    diagnostics.append(Diagnostic("E_ABSTRACT_PUBLICATION_CONFIG", f"duplicate publication group id '{group_id}'"))
+                group_ids.add(group_id)
     for key, value, path in values:
         if value is None or (isinstance(value, str) and not value.strip()):
             diagnostics.append(Diagnostic("E_ABSTRACT_METADATA_REQUIRED", f"required value is missing: {key}", SourceLocation(path, 1)))
@@ -414,9 +432,11 @@ def _validate_bibliography_entries(entries: list[BibEntry]) -> list[Diagnostic]:
     required = {
         "article": ({"author", "title", "year"}, ({"journal", "eprint"},)),
         "inproceedings": ({"author", "title", "year", "booktitle"}, ()),
+        "conference": ({"author", "title", "year", "booktitle"}, ()),
         "book": ({"title", "year", "publisher"}, ({"author", "editor"},)),
         "online": ({"title", "url", "urldate"}, ()),
         "www": ({"title", "url", "urldate"}, ()),
+        "electronic": ({"title", "url", "urldate"}, ()),
         "standard": ({"title", "year", "number"}, ()),
         "patent": ({"author", "title", "year", "number"}, ()),
         "phdthesis": ({"author", "title", "year", "school"}, ()),
@@ -426,6 +446,7 @@ def _validate_bibliography_entries(entries: list[BibEntry]) -> list[Diagnostic]:
     }
     seen_keys: set[str] = set()
     identifiers: dict[tuple[str, str], str] = {}
+    records: dict[tuple[str, str, str], str] = {}
     for entry in entries:
         if entry.key.casefold() in seen_keys:
             diagnostics.append(Diagnostic("E_BIB_KEY_DUPLICATE", f"duplicate bibliography key '{entry.key}'"))
@@ -443,6 +464,16 @@ def _validate_bibliography_entries(entries: list[BibEntry]) -> list[Diagnostic]:
                 )
         if entry.fields.get("url") and not entry.fields.get("urldate"):
             diagnostics.append(Diagnostic("E_BIB_ACCESS_DATE_MISSING", f"URL entry '{entry.key}' requires urldate"))
+        fingerprint = tuple(
+            re.sub(r"[^\w]+", "", entry.fields.get(field, "").casefold())
+            for field in ("author", "title", "year")
+        )
+        if fingerprint[1] and fingerprint in records:
+            diagnostics.append(
+                Diagnostic("E_BIB_RECORD_DUPLICATE", f"duplicate bibliographic record in '{records[fingerprint]}' and '{entry.key}'")
+            )
+        else:
+            records[fingerprint] = entry.key
         for field in ("doi", "isbn"):
             value = re.sub(r"[^a-z0-9]", "", entry.fields.get(field, "").casefold())
             if not value:

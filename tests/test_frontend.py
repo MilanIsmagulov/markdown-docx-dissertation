@@ -13,13 +13,14 @@ from builder import assets as assets_module
 from builder.docx_renderer import (
     _apply_section_profiles,
     _format_numbered_equations,
+    _format_publication_paragraphs,
     _install_cross_reference_fields,
     _prepend_abstract_front_matter,
     _set_font,
 )
 from builder.config import load_document_config
 from builder.cli import archive_previous_versions, next_versioned_output
-from builder.bibliography import publication_counts, read_bib_entries
+from builder.bibliography import BibEntry, format_publication, format_publication_authors, publication_counts, read_bib_entries
 from builder.statistics import measure_docx_pages, read_statistics_manifest, source_statistics, write_statistics_manifest
 from docx import Document
 from docx.oxml import OxmlElement
@@ -583,6 +584,48 @@ def test_conference_registry_generates_list_and_statistics(tmp_path: Path) -> No
     assert "- Conference (2026-02-20, City); доклад «Report»." in result
 
 
+def test_publication_list_uses_yaml_groups_initials_and_markers(tmp_path: Path) -> None:
+    publications = tmp_path / "publications.bib"
+    publications.write_text(
+        "@online{site, author={Иван Иванович Иванов and Петров, Петр Петрович}, "
+        "title={Ресурс}, year={2026}, url={https://example.test/a-b}, urldate={2026-08-20}, keywords={web}}",
+        encoding="utf-8",
+    )
+    result = process_assets(
+        "{{list:publications}}", tmp_path, publications_bibliography=publications,
+        publication_config={"groups": [{"id": "web", "title": "Сетевые работы", "keywords_any": ["web"]}]},
+    )
+
+    assert "**Сетевые работы:**" in result
+    assert "[[PUBLICATION:1]] Иванов И. И.; Петров П. П." in result
+    assert "[Электронный ресурс]" in result
+    assert "URL: https://example.test/a-b" in result
+    assert "дата обращения: 2026-08-20" in result
+
+
+def test_publication_author_order_and_entry_types_are_preserved() -> None:
+    assert format_publication_authors("Иванов, Иван Иванович and Петр Петрович Петров") == (
+        "Иванов И. И.; Петров П. П."
+    )
+    entry = BibEntry("software", "certificate", {
+        "author": "Иванов, Иван Иванович", "title": "Программа", "year": "2026", "number": "2000123456",
+    })
+    assert "Свидетельство о государственной регистрации программы для ЭВМ 2000123456" in format_publication(entry)
+
+
+def test_publication_docx_paragraph_has_hanging_indent() -> None:
+    document = Document()
+    paragraph = document.add_paragraph("[[PUBLICATION:12]] Long DOI: 10.1000/example")
+
+    _format_publication_paragraphs(document, {"publications": {"hanging_indent": "8mm"}})
+
+    assert paragraph.text.startswith("Long DOI")
+    assert paragraph._p.xpath("./w:pPr/w:numPr/w:numId")
+    children = list(document.part.numbering_part.element)
+    first_num = next(i for i, node in enumerate(children) if node.tag == qn("w:num"))
+    assert all(node.tag == qn("w:abstractNum") for node in children[:first_num])
+
+
 def test_validator_checks_object_references_assets_and_citations(tmp_path: Path) -> None:
     root = write_note(
         tmp_path,
@@ -606,6 +649,22 @@ source: assets/missing.png
     assert "E_OBJECT_REFERENCE_MISSING" in codes
     assert "E_CITATION_MISSING" in codes
     assert "W_BIB_UNUSED" in codes
+
+
+def test_validator_detects_duplicate_bibliographic_records(tmp_path: Path) -> None:
+    root = write_note(tmp_path, "root.md", "# Root\n")
+    bibliography = tmp_path / "publications.bib"
+    bibliography.write_text(
+        "@article{one, author={Иванов, И. И.}, title={Одинаковая работа}, year={2026}, journal={Журнал}}\n"
+        "@inproceedings{two, author={Иванов, И. И.}, title={Одинаковая работа}, year={2026}, booktitle={Труды}}",
+        encoding="utf-8",
+    )
+
+    diagnostics = validate_index(
+        build_index(tmp_path, tmp_path / "content"), root, publications_bibliography=bibliography,
+    )
+
+    assert "E_BIB_RECORD_DUPLICATE" in {item.code for item in diagnostics}
 
 
 def test_pdf_transclusion_is_validated_preserved_and_expanded(tmp_path: Path, monkeypatch) -> None:
