@@ -64,19 +64,35 @@ def archive_previous_versions(current_output: Path) -> list[Path]:
     return archived
 
 
-def validate(project_root: Path) -> int:
+def _document_validation_mode(project_root: Path, override: str | None = None) -> str:
+    path = project_root / "config" / "document.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    validation = data.get("validation", {})
+    if not isinstance(validation, dict):
+        raise ValueError("document validation configuration must be a mapping")
+    mode = override or str(validation.get("mode", "draft"))
+    if mode not in {"draft", "final"}:
+        raise ValueError(f"unknown dissertation validation mode: {mode}")
+    return mode
+
+
+def validate(project_root: Path, validation_mode: str | None = None) -> int:
     try:
         config = load_document_config(project_root)
-    except ValueError as exc:
+        mode = _document_validation_mode(project_root, validation_mode)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"ERROR E_CONFIG: {exc}")
         return 1
     index = build_index(project_root, config.content_dir)
-    diagnostics = validate_index(index, config.root_note, config.bibliography, config.publications_bibliography, config.conferences_bibliography)
+    diagnostics = validate_index(
+        index, config.root_note, config.bibliography, config.publications_bibliography,
+        config.conferences_bibliography, validation_mode=mode,
+    )
     for diagnostic in diagnostics:
         print(diagnostic.format(project_root))
     errors = sum(item.severity == "error" for item in diagnostics)
     warnings = sum(item.severity == "warning" for item in diagnostics)
-    print(f"Validated {len(index.notes)} note(s): {errors} error(s), {warnings} warning(s)")
+    print(f"Validated dissertation in {mode} mode ({len(index.notes)} notes): {errors} error(s), {warnings} warning(s)")
     return 1 if errors else 0
 
 
@@ -140,14 +156,18 @@ def validate_abstract(project_root: Path, validation_mode: str | None = None) ->
     return 1 if errors else 0
 
 
-def assemble(project_root: Path) -> int:
+def assemble(project_root: Path, validation_mode: str | None = None) -> int:
     try:
         config = load_document_config(project_root)
-    except ValueError as exc:
+        mode = _document_validation_mode(project_root, validation_mode)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"ERROR E_CONFIG: {exc}")
         return 1
     index = build_index(project_root, config.content_dir)
-    diagnostics = validate_index(index, config.root_note, config.bibliography, config.publications_bibliography, config.conferences_bibliography)
+    diagnostics = validate_index(
+        index, config.root_note, config.bibliography, config.publications_bibliography,
+        config.conferences_bibliography, validation_mode=mode,
+    )
     errors = [item for item in diagnostics if item.severity == "error"]
     if errors:
         for diagnostic in diagnostics:
@@ -190,8 +210,12 @@ def _record_dissertation_statistics(project_root: Path, config, index, output: P
     return write_statistics_manifest(project_root, output, stats)
 
 
-def build(project_root: Path, require_statistics: bool = False) -> int:
-    assembled = assemble(project_root)
+def build(
+    project_root: Path,
+    require_statistics: bool = False,
+    validation_mode: str | None = None,
+) -> int:
+    assembled = assemble(project_root, validation_mode)
     if assembled:
         return assembled
     config = load_document_config(project_root)
@@ -326,7 +350,7 @@ def build_abstract_release(project_root: Path, validation_mode: str | None = Non
 
 
 def build_all(project_root: Path, validation_mode: str | None = None) -> int:
-    if build(project_root, require_statistics=True):
+    if build(project_root, require_statistics=True, validation_mode=validation_mode):
         return 1
     return build_abstract(project_root, validation_mode)
 
@@ -335,11 +359,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="md2docx")
     parser.add_argument("--project", type=Path, default=Path.cwd())
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("validate", help="validate source graph")
+    dissertation_validator = subparsers.add_parser("validate", help="validate source graph")
+    dissertation_validator.add_argument("--mode", choices=("draft", "final"))
     abstract_validator = subparsers.add_parser("validate-abstract", help="validate abstract source graph")
     abstract_validator.add_argument("--mode", choices=("draft", "final"))
-    subparsers.add_parser("assemble", help="expand transclusions into Markdown")
-    subparsers.add_parser("build", help="assemble and render DOCX")
+    dissertation_assembler = subparsers.add_parser("assemble", help="expand transclusions into Markdown")
+    dissertation_assembler.add_argument("--mode", choices=("draft", "final"))
+    dissertation_builder = subparsers.add_parser("build", help="assemble and render DOCX")
+    dissertation_builder.add_argument("--mode", choices=("draft", "final"))
     abstract_assembler = subparsers.add_parser("assemble-abstract", help="assemble abstract Markdown")
     abstract_assembler.add_argument("--mode", choices=("draft", "final"))
     abstract_builder = subparsers.add_parser("build-abstract", help="assemble and render abstract DOCX")
@@ -351,13 +378,13 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("scaffold", help="create chapter and paragraph Markdown structure")
     args = parser.parse_args(argv)
     if args.command == "validate":
-        return validate(args.project.resolve())
+        return validate(args.project.resolve(), args.mode)
     if args.command == "validate-abstract":
         return validate_abstract(args.project.resolve(), args.mode)
     if args.command == "assemble":
-        return assemble(args.project.resolve())
+        return assemble(args.project.resolve(), args.mode)
     if args.command == "build":
-        return build(args.project.resolve())
+        return build(args.project.resolve(), validation_mode=args.mode)
     if args.command == "assemble-abstract":
         return assemble_abstract(args.project.resolve(), args.mode)
     if args.command == "build-abstract":
