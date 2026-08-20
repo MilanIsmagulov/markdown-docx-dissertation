@@ -6,6 +6,28 @@ document:
 numbering:
   objects: global
 
+validation:
+  mode: draft
+  public_profile: true
+  placeholder_markers:
+    - "[указать"
+    - "_____"
+    - "20__"
+    - "Название диссертационной работы"
+    - "Название университета"
+    - "Иванов Иван Иванович"
+    - "наименование структурного подразделения"
+    - "Город"
+    - "2000"
+  # These fields intentionally remain blank for manual completion by the council.
+  allowed_placeholder_fields:
+    - abstract.defense.date
+    - abstract.defense.time
+    - abstract.defense.mailing_date
+  # Private projects may list real names, organizations, titles or DOI here.
+  # The public profile then refuses to build if one of these values leaks in.
+  denylist: []
+
 layout:
   page_size: A5
   margins: {left: 15mm, right: 15mm, top: 15mm, bottom: 15mm}

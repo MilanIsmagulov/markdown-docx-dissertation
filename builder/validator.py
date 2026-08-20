@@ -15,6 +15,7 @@ OBJECT_REFERENCE_RE = re.compile(r"\{\{(?:ref|number):(?P<kind>table|figure|equa
 CITATION_RE = re.compile(r"(?<![\w@])@(?P<key>[A-Za-z0-9_:.+/-]+)")
 BIB_KEY_RE = re.compile(r"@[A-Za-z]+\s*\{\s*(?P<key>[^,\s]+)\s*,", re.IGNORECASE)
 SECTION_RE = re.compile(r"\{\{section:(?P<name>[a-z][a-z0-9_-]*)}}")
+DEFAULT_PLACEHOLDER_MARKERS = ("[указать", "_____", "________", "20__")
 
 
 def _heading_key(text: str) -> str:
@@ -27,7 +28,10 @@ def validate_index(
     bibliography: Path | None = None,
     publications_bibliography: Path | None = None,
     conferences_bibliography: Path | None = None,
+    validation_mode: str = "draft",
 ) -> list[Diagnostic]:
+    if validation_mode not in {"draft", "final"}:
+        return [Diagnostic("E_VALIDATION_MODE", f"unknown validation mode: '{validation_mode}'")]
     diagnostics = list(index.diagnostics)
     if root_note is not None and not root_note.is_file():
         diagnostics.append(Diagnostic("E_ROOT_MISSING", f"entry document does not exist: {root_note}"))
@@ -85,19 +89,164 @@ def validate_index(
                         )
                     )
     diagnostics.extend(_validate_transclusion_cycles(index))
+    selected_root = next(
+        (note for note in index.notes if root_note is not None and note.path.resolve() == root_note.resolve()),
+        None,
+    )
+    root_is_abstract = selected_root is not None and str(selected_root.metadata.get("type", "")).casefold() == "abstract"
     diagnostics.extend(
         _validate_document_sources(
             index,
             bibliography,
             publications_bibliography,
             notes=_reachable_notes(index, root_note),
+            report_unused_bibliography=not root_is_abstract,
         )
     )
     diagnostics.extend(_validate_conferences(conferences_bibliography))
     diagnostics.extend(_validate_appendices(index))
     diagnostics.extend(_validate_sections(index))
     diagnostics.extend(_validate_semantic_sources(index))
+    diagnostics.extend(_validate_abstract(index, root_note, validation_mode))
     diagnostics.extend(_validate_reachability(index, root_note))
+    return diagnostics
+
+
+def _read_yaml_mapping(path: Path, code: str) -> tuple[dict, list[Diagnostic]]:
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    except FileNotFoundError:
+        return {}, [Diagnostic(code, f"configuration does not exist: {path}")]
+    except yaml.YAMLError as exc:
+        return {}, [Diagnostic(code, f"invalid YAML in {path}: {exc}")]
+    if not isinstance(data, dict):
+        return {}, [Diagnostic(code, f"configuration must be a mapping: {path}")]
+    return data, []
+
+
+def _nested_value(data: dict, dotted_key: str):
+    value = data
+    for part in dotted_key.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def _validate_abstract(index: ProjectIndex, root_note: Path | None, mode: str) -> list[Diagnostic]:
+    if root_note is None:
+        return []
+    root = next((note for note in index.notes if note.path.resolve() == root_note.resolve()), None)
+    if root is None or str(root.metadata.get("type", "")).casefold() != "abstract":
+        return []
+
+    diagnostics: list[Diagnostic] = []
+    metadata_path = index.root / "config" / "metadata.yaml"
+    abstract_path = index.root / "config" / "abstract.yaml"
+    research_path = index.root / "config" / "research.yaml"
+    metadata, problems = _read_yaml_mapping(metadata_path, "E_ABSTRACT_METADATA_CONFIG")
+    diagnostics.extend(problems)
+    abstract, problems = _read_yaml_mapping(abstract_path, "E_ABSTRACT_CONFIG")
+    diagnostics.extend(problems)
+    research, problems = _read_yaml_mapping(research_path, "E_ABSTRACT_RESEARCH_CONFIG")
+    diagnostics.extend(problems)
+    if diagnostics:
+        return diagnostics
+
+    required_metadata = (
+        "title", "degree", "author.full_name", "organization.full_name",
+        "specialty.code", "specialty.name", "supervisor.full_name",
+        "supervisor.degree", "supervisor.title", "city", "year",
+    )
+    required_defense = (
+        "organization", "organization_unit", "leading_organization", "date", "time",
+        "council", "address", "library", "website", "mailing_date", "secretary",
+        "secretary_degree",
+    )
+    values: list[tuple[str, object, Path]] = []
+    for key in required_metadata:
+        value = _nested_value(metadata, key)
+        values.append((f"metadata.{key}", value, metadata_path))
+    for key in required_defense:
+        value = _nested_value(abstract, f"defense.{key}")
+        values.append((f"abstract.defense.{key}", value, abstract_path))
+    opponents = _nested_value(abstract, "defense.opponents")
+    if not isinstance(opponents, list) or not opponents:
+        diagnostics.append(Diagnostic("E_ABSTRACT_METADATA_REQUIRED", "abstract.defense.opponents must contain at least one entry"))
+    else:
+        for index_number, opponent in enumerate(opponents, 1):
+            for key in ("degree", "full_name"):
+                value = opponent.get(key) if isinstance(opponent, dict) else None
+                values.append((f"abstract.defense.opponents[{index_number}].{key}", value, abstract_path))
+
+    validation = abstract.get("validation", {})
+    if not isinstance(validation, dict):
+        diagnostics.append(Diagnostic("E_ABSTRACT_VALIDATION_CONFIG", "abstract.validation must be a mapping"))
+        validation = {}
+    markers = validation.get("placeholder_markers", DEFAULT_PLACEHOLDER_MARKERS)
+    if not isinstance(markers, list) or not all(isinstance(item, str) for item in markers):
+        diagnostics.append(Diagnostic("E_ABSTRACT_VALIDATION_CONFIG", "placeholder_markers must be a list of strings"))
+        markers = list(DEFAULT_PLACEHOLDER_MARKERS)
+    allowed_placeholder_fields = validation.get("allowed_placeholder_fields", [])
+    if not isinstance(allowed_placeholder_fields, list) or not all(isinstance(item, str) for item in allowed_placeholder_fields):
+        diagnostics.append(Diagnostic("E_ABSTRACT_VALIDATION_CONFIG", "allowed_placeholder_fields must be a list of strings"))
+        allowed_placeholder_fields = []
+    allowed_placeholder_fields = set(allowed_placeholder_fields)
+    for key, value, path in values:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            diagnostics.append(Diagnostic("E_ABSTRACT_METADATA_REQUIRED", f"required value is missing: {key}", SourceLocation(path, 1)))
+            continue
+        rendered = str(value).casefold()
+        if key not in allowed_placeholder_fields and any(marker.casefold() in rendered for marker in markers):
+            severity = "error" if mode == "final" else "warning"
+            diagnostics.append(Diagnostic("E_ABSTRACT_PLACEHOLDER" if mode == "final" else "W_ABSTRACT_PLACEHOLDER", f"placeholder remains in {key}", SourceLocation(path, 1), severity))
+
+    expected_chapters = research.get("chapters", [])
+    if not isinstance(expected_chapters, list):
+        diagnostics.append(Diagnostic("E_ABSTRACT_CHAPTER_CONFIG", "research.chapters must be a list"))
+        expected_chapters = []
+    expected_summaries = {
+        str(item.get("id", "")).strip(): str(item.get("summary", "")).strip()
+        for item in expected_chapters if isinstance(item, dict) and str(item.get("id", "")).strip()
+    }
+    expected_sources = set(expected_summaries)
+    reachable = _reachable_notes(index, root_note)
+    summaries = [note for note in reachable if str(note.metadata.get("type", "")).casefold() == "chapter-summary"]
+    sources: dict[str, Note] = {}
+    for summary in summaries:
+        source = str(summary.metadata.get("source", "")).strip()
+        if not source:
+            diagnostics.append(Diagnostic("E_ABSTRACT_CHAPTER_SOURCE", f"chapter summary '{summary.title}' has no source", SourceLocation(summary.path, 1)))
+        elif source in sources:
+            diagnostics.append(Diagnostic("E_ABSTRACT_CHAPTER_SOURCE_DUPLICATE", f"chapter source '{source}' is used more than once", SourceLocation(summary.path, 1)))
+        else:
+            sources[source] = summary
+            source_note = index.by_id.get(source.casefold())
+            if source_note is not None and str(source_note.metadata.get("type", "")).casefold() != "chapter":
+                diagnostics.append(Diagnostic("E_ABSTRACT_CHAPTER_SOURCE_TYPE", f"source '{source}' must have type 'chapter'", SourceLocation(summary.path, 1)))
+            expected_summary_id = expected_summaries.get(source)
+            if expected_summary_id and summary.note_id != expected_summary_id:
+                diagnostics.append(Diagnostic("E_ABSTRACT_CHAPTER_SUMMARY_ID", f"source '{source}' expects summary id '{expected_summary_id}'", SourceLocation(summary.path, 1)))
+    missing = sorted(expected_sources - sources.keys())
+    unexpected = sorted(sources.keys() - expected_sources)
+    if len(summaries) != len(expected_sources):
+        diagnostics.append(Diagnostic("E_ABSTRACT_CHAPTER_COUNT", f"expected {len(expected_sources)} chapter summaries, found {len(summaries)}", SourceLocation(root.path, 1)))
+    for source in missing:
+        diagnostics.append(Diagnostic("E_ABSTRACT_CHAPTER_MISSING", f"chapter summary is missing for '{source}'", SourceLocation(root.path, 1)))
+    for source in unexpected:
+        diagnostics.append(Diagnostic("E_ABSTRACT_CHAPTER_UNEXPECTED", f"unexpected chapter summary source '{source}'", SourceLocation(sources[source].path, 1)))
+
+    denylist = validation.get("denylist", [])
+    public_profile = bool(validation.get("public_profile", False))
+    if not isinstance(denylist, list) or not all(isinstance(item, str) and item.strip() for item in denylist):
+        diagnostics.append(Diagnostic("E_ABSTRACT_VALIDATION_CONFIG", "denylist must be a list of non-empty strings"))
+    elif public_profile:
+        scanned = [metadata_path, abstract_path, *[note.path for note in reachable]]
+        for token in denylist:
+            for path in scanned:
+                if token.casefold() in path.read_text(encoding="utf-8-sig").casefold():
+                    diagnostics.append(Diagnostic("E_PUBLIC_DENYLIST", f"deny-listed value found in public profile: '{token}'", SourceLocation(path, 1)))
+                    break
     return diagnostics
 
 
@@ -194,6 +343,7 @@ def _validate_document_sources(
     bibliography: Path | None,
     publications_bibliography: Path | None = None,
     notes: list[Note] | None = None,
+    report_unused_bibliography: bool = True,
 ) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     objects: dict[tuple[str, str], SourceLocation] = {}
@@ -253,7 +403,7 @@ def _validate_document_sources(
             if key not in bib_keys:
                 diagnostics.append(Diagnostic("E_CITATION_MISSING", f"citation key '{key}' is absent from bibliography", location))
         for key in sorted(bib_keys - citations.keys()):
-            if key in {entry.key for entry in bibliography_entries}:
+            if report_unused_bibliography and key in {entry.key for entry in bibliography_entries}:
                 diagnostics.append(Diagnostic("W_BIB_UNUSED", f"bibliography entry '{key}' is not cited", severity="warning"))
         diagnostics.extend(_validate_bibliography_entries(all_entries))
     return diagnostics
@@ -328,8 +478,16 @@ def _validate_reachability(index: ProjectIndex, root_note: Path | None) -> list[
     if root is None:
         return []
     reachable = {note.path for note in _reachable_notes(index, root_note)}
+    if str(root.metadata.get("type", "")).casefold() == "abstract":
+        relevant_types = {"abstract", "chapter-summary"}
+        return [
+            Diagnostic("W_NOTE_ORPHAN", "note is not included from the root document", SourceLocation(note.path, 1), "warning")
+            for note in index.notes
+            if note.path not in reachable
+            and str(note.metadata.get("type", "")).casefold() in relevant_types
+        ]
     library_types = {"canonical-research-statement"}
-    alternate_document_types = {"abstract", "chapter-summary"} if root.metadata.get("type") != "abstract" else {"document"}
+    alternate_document_types = {"abstract", "chapter-summary"}
     return [
         Diagnostic("W_NOTE_ORPHAN", "note is not included from the root document", SourceLocation(note.path, 1), "warning")
         for note in index.notes

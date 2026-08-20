@@ -33,6 +33,54 @@ def write_note(root: Path, relative: str, text: str) -> Path:
     return path
 
 
+def write_abstract_validation_config(root: Path, *, denylist: list[str] | None = None) -> None:
+    config = root / "config"
+    config.mkdir(exist_ok=True)
+    (config / "metadata.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "title": "Title", "degree": "Degree", "city": "City", "year": 2026,
+                "author": {"full_name": "Author"},
+                "organization": {"full_name": "Organization"},
+                "specialty": {"code": "2.3.1", "name": "Specialty"},
+                "supervisor": {"full_name": "Supervisor", "degree": "Degree", "title": "Title"},
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    (config / "abstract.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "validation": {
+                    "public_profile": True,
+                    "placeholder_markers": ["[specify", "_____", "20__"],
+                    "allowed_placeholder_fields": [
+                        "abstract.defense.date", "abstract.defense.time",
+                        "abstract.defense.mailing_date",
+                    ],
+                    "denylist": denylist or [],
+                },
+                "defense": {
+                    "organization": "Organization", "organization_unit": "Unit",
+                    "opponents": [{"degree": "Degree", "full_name": "Opponent"}],
+                    "leading_organization": "[specify organization]", "date": "_____ 20__",
+                    "time": "_____", "council": "Council", "address": "Address",
+                    "library": "Library", "website": "https://example.test",
+                    "mailing_date": "_____ 20__", "secretary": "Secretary",
+                    "secretary_degree": "Degree",
+                },
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    (config / "research.yaml").write_text(
+        "chapters:\n  - {id: 'chapter:1', summary: 'abstract:chapter:1'}\n",
+        encoding="utf-8",
+    )
+
+
 def test_document_config_resolves_bibliography_and_csl(tmp_path: Path) -> None:
     (tmp_path / "config").mkdir()
     (tmp_path / "bibliography").mkdir()
@@ -338,6 +386,66 @@ def test_validator_does_not_resolve_object_reference_from_another_document(tmp_p
 
     assert not any(item.code == "E_OBJECT_REFERENCE_MISSING" for item in dissertation_diagnostics)
     assert any(item.code == "E_OBJECT_REFERENCE_MISSING" for item in abstract_diagnostics)
+
+
+def test_abstract_validator_allows_placeholders_only_in_draft_mode(tmp_path: Path) -> None:
+    write_abstract_validation_config(tmp_path)
+    root = write_note(
+        tmp_path, "abstract.md",
+        "---\nid: document:abstract\ntype: abstract\n---\n\n![[summary]]\n",
+    )
+    write_note(
+        tmp_path, "summary.md",
+        "---\nid: abstract:chapter:1\ntype: chapter-summary\nsource: chapter:1\n---\n\nSummary\n",
+    )
+    index = build_index(tmp_path, tmp_path / "content")
+
+    draft = validate_index(index, root, validation_mode="draft")
+    final = validate_index(index, root, validation_mode="final")
+
+    assert any(item.code == "W_ABSTRACT_PLACEHOLDER" and item.severity == "warning" for item in draft)
+    assert not any(item.code == "E_ABSTRACT_PLACEHOLDER" for item in draft)
+    assert any(item.code == "E_ABSTRACT_PLACEHOLDER" and item.severity == "error" for item in final)
+    assert not any(
+        item.code == "E_ABSTRACT_PLACEHOLDER"
+        and item.message.endswith(("abstract.defense.date", "abstract.defense.time", "abstract.defense.mailing_date"))
+        for item in final
+    )
+
+
+def test_abstract_validator_checks_chapter_summary_count_and_unique_source(tmp_path: Path) -> None:
+    write_abstract_validation_config(tmp_path)
+    root = write_note(
+        tmp_path, "abstract.md",
+        "---\ntype: abstract\n---\n\n![[summary-a]]\n![[summary-b]]\n",
+    )
+    for name in ("summary-a", "summary-b"):
+        write_note(
+            tmp_path, f"{name}.md",
+            f"---\nid: abstract:{name}\ntype: chapter-summary\nsource: chapter:1\n---\n\nSummary\n",
+        )
+
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
+    codes = {item.code for item in diagnostics}
+
+    assert "E_ABSTRACT_CHAPTER_SOURCE_DUPLICATE" in codes
+    assert "E_ABSTRACT_CHAPTER_COUNT" in codes
+
+
+def test_abstract_validator_applies_configured_public_denylist(tmp_path: Path) -> None:
+    write_abstract_validation_config(tmp_path, denylist=["private-token"])
+    root = write_note(
+        tmp_path, "abstract.md",
+        "---\ntype: abstract\n---\n\n![[summary]]\n\nprivate-token\n",
+    )
+    write_note(
+        tmp_path, "summary.md",
+        "---\nid: abstract:chapter:1\ntype: chapter-summary\nsource: chapter:1\n---\n\nSummary\n",
+    )
+
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
+
+    assert any(item.code == "E_PUBLIC_DENYLIST" for item in diagnostics)
 
 
 def test_asset_processor_expands_object_and_term_lists(tmp_path: Path) -> None:

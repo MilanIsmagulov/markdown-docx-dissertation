@@ -73,6 +73,50 @@ def validate(project_root: Path) -> int:
     return 1 if errors else 0
 
 
+def _load_abstract_config(project_root: Path) -> dict:
+    path = project_root / "config" / "abstract.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"abstract configuration must be a mapping: {path}")
+    return data
+
+
+def _abstract_validation_mode(abstract_data: dict, override: str | None = None) -> str:
+    validation = abstract_data.get("validation", {})
+    if not isinstance(validation, dict):
+        raise ValueError("abstract.validation must be a mapping")
+    mode = override or str(validation.get("mode", "draft"))
+    if mode not in {"draft", "final"}:
+        raise ValueError(f"unknown abstract validation mode: {mode}")
+    return mode
+
+
+def validate_abstract(project_root: Path, validation_mode: str | None = None) -> int:
+    try:
+        config = load_document_config(project_root)
+        abstract_data = _load_abstract_config(project_root)
+        mode = _abstract_validation_mode(abstract_data, validation_mode)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"ERROR E_CONFIG: {exc}")
+        return 1
+    document = abstract_data.get("document", {})
+    if not isinstance(document, dict):
+        print("ERROR E_CONFIG: abstract.document must be a mapping")
+        return 1
+    root_path = project_root / str(document.get("root", "content/80 Abstract/Автореферат.md"))
+    index = build_index(project_root, config.content_dir)
+    diagnostics = validate_index(
+        index, root_path, config.bibliography, config.publications_bibliography,
+        config.conferences_bibliography, validation_mode=mode,
+    )
+    for diagnostic in diagnostics:
+        print(diagnostic.format(project_root))
+    errors = sum(item.severity == "error" for item in diagnostics)
+    warnings = sum(item.severity == "warning" for item in diagnostics)
+    print(f"Validated abstract in {mode} mode: {errors} error(s), {warnings} warning(s)")
+    return 1 if errors else 0
+
+
 def assemble(project_root: Path) -> int:
     try:
         config = load_document_config(project_root)
@@ -134,14 +178,18 @@ def build(project_root: Path) -> int:
     return 0
 
 
-def assemble_abstract(project_root: Path) -> int:
+def assemble_abstract(project_root: Path, validation_mode: str | None = None) -> int:
     config = load_document_config(project_root)
-    abstract_data = yaml.safe_load((project_root / "config" / "abstract.yaml").read_text(encoding="utf-8-sig")) or {}
+    abstract_data = _load_abstract_config(project_root)
+    mode = _abstract_validation_mode(abstract_data, validation_mode)
     document = abstract_data.get("document", {})
     root_path = project_root / str(document.get("root", "content/80 Abstract/Автореферат.md"))
     output_path = project_root / str(document.get("assembled_markdown", "build/abstract-assembled.md"))
     index = build_index(project_root, config.content_dir)
-    diagnostics = validate_index(index, root_path, config.bibliography, config.publications_bibliography, config.conferences_bibliography)
+    diagnostics = validate_index(
+        index, root_path, config.bibliography, config.publications_bibliography,
+        config.conferences_bibliography, validation_mode=mode,
+    )
     errors = [item for item in diagnostics if item.severity == "error"]
     if errors:
         for diagnostic in diagnostics:
@@ -176,11 +224,11 @@ def assemble_abstract(project_root: Path) -> int:
     return 0
 
 
-def build_abstract(project_root: Path) -> int:
-    if assemble_abstract(project_root):
+def build_abstract(project_root: Path, validation_mode: str | None = None) -> int:
+    if assemble_abstract(project_root, validation_mode):
         return 1
     config = load_document_config(project_root)
-    abstract_data = yaml.safe_load((project_root / "config" / "abstract.yaml").read_text(encoding="utf-8-sig")) or {}
+    abstract_data = _load_abstract_config(project_root)
     document = abstract_data.get("document", {})
     assembled = project_root / str(document.get("assembled_markdown", "build/abstract-assembled.md"))
     configured_output = project_root / str(document.get("output", "build/abstract.docx"))
@@ -206,22 +254,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project", type=Path, default=Path.cwd())
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("validate", help="validate source graph")
+    abstract_validator = subparsers.add_parser("validate-abstract", help="validate abstract source graph")
+    abstract_validator.add_argument("--mode", choices=("draft", "final"))
     subparsers.add_parser("assemble", help="expand transclusions into Markdown")
     subparsers.add_parser("build", help="assemble and render DOCX")
-    subparsers.add_parser("assemble-abstract", help="assemble abstract Markdown")
-    subparsers.add_parser("build-abstract", help="assemble and render abstract DOCX")
+    abstract_assembler = subparsers.add_parser("assemble-abstract", help="assemble abstract Markdown")
+    abstract_assembler.add_argument("--mode", choices=("draft", "final"))
+    abstract_builder = subparsers.add_parser("build-abstract", help="assemble and render abstract DOCX")
+    abstract_builder.add_argument("--mode", choices=("draft", "final"))
     subparsers.add_parser("scaffold", help="create chapter and paragraph Markdown structure")
     args = parser.parse_args(argv)
     if args.command == "validate":
         return validate(args.project.resolve())
+    if args.command == "validate-abstract":
+        return validate_abstract(args.project.resolve(), args.mode)
     if args.command == "assemble":
         return assemble(args.project.resolve())
     if args.command == "build":
         return build(args.project.resolve())
     if args.command == "assemble-abstract":
-        return assemble_abstract(args.project.resolve())
+        return assemble_abstract(args.project.resolve(), args.mode)
     if args.command == "build-abstract":
-        return build_abstract(args.project.resolve())
+        return build_abstract(args.project.resolve(), args.mode)
     if args.command == "scaffold":
         try:
             created, chapters = scaffold(args.project.resolve())
