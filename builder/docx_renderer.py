@@ -749,6 +749,46 @@ def _format_numbered_equations(document: Document, styles: dict) -> None:
         marker._element.getparent().remove(marker._element)
 
 
+def _format_equation_where_blocks(document: Document, styles: dict) -> None:
+    family = styles["body"]["font"]["family"]
+    paragraphs = list(document.paragraphs)
+    start: int | None = None
+    for index, paragraph in enumerate(paragraphs):
+        text = paragraph.text.strip()
+        if text == "[[WHERE_BEGIN]]":
+            if start is not None:
+                raise ValueError("nested equation where block")
+            start = index
+            continue
+        if text != "[[WHERE_END]]":
+            continue
+        if start is None:
+            raise ValueError("equation where block has no start marker")
+        block = [item for item in paragraphs[start + 1 : index] if item.text.strip()]
+        if not block:
+            raise ValueError("equation where block is empty")
+        for offset, item in enumerate(block):
+            item.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            item.paragraph_format.space_before = Pt(0)
+            item.paragraph_format.space_after = Pt(0)
+            item.paragraph_format.line_spacing = 1.0
+            if offset == 0:
+                item.paragraph_format.left_indent = Mm(0)
+                item.paragraph_format.first_line_indent = Mm(0)
+            else:
+                item.paragraph_format.left_indent = Mm(10)
+                item.paragraph_format.first_line_indent = Mm(-10)
+            item.paragraph_format.keep_with_next = offset < len(block) - 1
+            for run in item.runs:
+                run.font.name = family
+                run.font.size = Pt(14)
+        paragraphs[start]._p.getparent().remove(paragraphs[start]._p)
+        paragraph._p.getparent().remove(paragraph._p)
+        start = None
+    if start is not None:
+        raise ValueError("equation where block has no end marker")
+
+
 def _format_pdf_page_breaks(document: Document) -> None:
     paragraphs = list(document.paragraphs)
     for index, paragraph in enumerate(paragraphs):
@@ -1412,6 +1452,7 @@ def render_docx(
     _request_field_updates(document)
     _format_numbered_objects(document, styles)
     _format_numbered_equations(document, styles)
+    _format_equation_where_blocks(document, styles)
     _install_cross_reference_fields(document, document_kind)
     _format_pdf_page_breaks(document)
     if document_kind == "dissertation":
