@@ -22,3 +22,12 @@ numbering:
   figures: chapter
   tables: chapter
   equations: chapter
+
+validation:
+  mode: draft
+  placeholder_markers:
+    - "[указать"
+    - "_____"
+    - "________"
+    - "20__"
+  allowed_metadata: []

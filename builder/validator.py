@@ -7,6 +7,8 @@ import yaml
 
 from .bibliography import BibEntry, completed_entries, read_bib_entries
 from .model import Diagnostic, Note, SourceLocation
+from .preflight import DEFAULT_PLACEHOLDER_MARKERS as DISSERTATION_PLACEHOLDERS
+from .preflight import validate_dissertation
 from .resolver import ProjectIndex
 
 
@@ -108,8 +110,46 @@ def validate_index(
     diagnostics.extend(_validate_sections(index))
     diagnostics.extend(_validate_semantic_sources(index))
     diagnostics.extend(_validate_abstract(index, root_note, validation_mode))
+    validation_config, validation_problems = _dissertation_validation_options(index)
+    diagnostics.extend(validation_problems)
+    if not validation_problems:
+        diagnostics.extend(
+            validate_dissertation(
+                index,
+                root_note,
+                validation_mode,
+                placeholder_markers=validation_config["placeholder_markers"],
+                allowed_metadata=validation_config["allowed_metadata"],
+            )
+        )
     diagnostics.extend(_validate_reachability(index, root_note))
     return diagnostics
+
+
+def _dissertation_validation_options(index: ProjectIndex) -> tuple[dict, list[Diagnostic]]:
+    path = index.root / "config" / "document.yaml"
+    if not path.is_file():
+        return {
+            "placeholder_markers": DISSERTATION_PLACEHOLDERS,
+            "allowed_metadata": set(),
+        }, []
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    except yaml.YAMLError as exc:
+        return {}, [Diagnostic("E_VALIDATION_CONFIG", f"invalid document configuration: {exc}")]
+    validation = data.get("validation", {})
+    if not isinstance(validation, dict):
+        return {}, [Diagnostic("E_VALIDATION_CONFIG", "validation must be a mapping")]
+    markers = validation.get("placeholder_markers", list(DISSERTATION_PLACEHOLDERS))
+    allowed = validation.get("allowed_metadata", [])
+    diagnostics: list[Diagnostic] = []
+    if not isinstance(markers, list) or not all(isinstance(item, str) and item for item in markers):
+        diagnostics.append(Diagnostic("E_VALIDATION_CONFIG", "validation.placeholder_markers must be a list of strings"))
+        markers = list(DISSERTATION_PLACEHOLDERS)
+    if not isinstance(allowed, list) or not all(isinstance(item, str) and item for item in allowed):
+        diagnostics.append(Diagnostic("E_VALIDATION_CONFIG", "validation.allowed_metadata must be a list of strings"))
+        allowed = []
+    return {"placeholder_markers": tuple(markers), "allowed_metadata": set(allowed)}, diagnostics
 
 
 def _read_yaml_mapping(path: Path, code: str) -> tuple[dict, list[Diagnostic]]:
@@ -564,7 +604,7 @@ def _validate_reachability(index: ProjectIndex, root_note: Path | None) -> list[
         Diagnostic("W_NOTE_ORPHAN", "note is not included from the root document", SourceLocation(note.path, 1), "warning")
         for note in index.notes
         if note.path not in reachable
-        and not note.path.name.startswith("_")
+        and not any(part.startswith("_") for part in note.path.relative_to(index.content_dir).parts)
         and str(note.metadata.get("type", "")) not in library_types | alternate_document_types
     ]
 

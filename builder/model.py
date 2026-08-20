@@ -46,16 +46,18 @@ class Diagnostic:
     message: str
     location: SourceLocation | None = None
     severity: Literal["error", "warning"] = "error"
+    hint: str | None = None
 
     def format(self, root: Path | None = None) -> str:
         prefix = self.severity.upper()
+        suffix = f" Hint: {self.hint}" if self.hint else ""
         if self.location is None:
-            return f"{prefix} {self.code}: {self.message}"
+            return f"{prefix} {self.code}: {self.message}{suffix}"
         path = self.location.path
         if root is not None:
             try:
                 path = path.relative_to(root)
             except ValueError:
                 pass
-        return f"{path}:{self.location.line}:{self.location.column}: {prefix} {self.code}: {self.message}"
+        return f"{path}:{self.location.line}:{self.location.column}: {prefix} {self.code}: {self.message}{suffix}"
 
