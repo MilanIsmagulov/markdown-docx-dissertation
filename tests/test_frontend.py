@@ -1,12 +1,15 @@
 from pathlib import Path
+import shutil
+import subprocess
 
+import pytest
 import yaml
 
 from builder.scaffold import scaffold
 
 from builder.parser import parse_note
 from builder.resolver import build_index
-from builder.validator import validate_index
+from builder.validator import _validate_bibliography_entries, validate_index
 from builder.assembler import assemble_note
 from builder.assets import process_assets
 from builder import assets as assets_module
@@ -740,6 +743,111 @@ def test_validator_detects_duplicate_bibliographic_records(tmp_path: Path) -> No
     )
 
     assert "E_BIB_RECORD_DUPLICATE" in {item.code for item in diagnostics}
+
+
+def test_validator_accepts_complete_supported_bibliography_types(tmp_path: Path) -> None:
+    root = write_note(
+        tmp_path,
+        "root.md",
+        "# Root\n\n[@chapter; @report; @abstract; @web]\n",
+    )
+    bibliography = tmp_path / "bibliography.bib"
+    bibliography.write_text(
+        "@incollection{chapter, author={Иванов, И. И.}, title={Глава}, year={2024}, "
+        "booktitle={Книга}, publisher={Издательство}, pages={10--20}}\n"
+        "@report{report, author={Петров, П. П.}, title={Отчёт}, year={2025}, institution={Организация}}\n"
+        "@thesis{abstract, author={Сидоров, С. С.}, title={Автореферат}, year={2026}, "
+        "school={Университет}, type={Автореферат диссертации}}\n"
+        "@online{web, title={Электронный ресурс}, url={https://example.test/resource}, urldate={2026-08-20}}\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root, bibliography)
+
+    assert not [item for item in diagnostics if item.severity == "error"]
+
+
+def test_all_declared_bibliography_types_have_complete_field_contracts() -> None:
+    common = {"author": "Иванов, И. И.", "title": "Название", "year": "2026"}
+    entries = [
+        BibEntry("article", "article", {**common, "journal": "Журнал"}),
+        BibEntry("inproceedings", "proceedings", {**common, "booktitle": "Труды"}),
+        BibEntry("conference", "conference", {**common, "booktitle": "Труды"}),
+        BibEntry("book", "book", {**common, "publisher": "Издательство", "isbn": "978-3-16-148410-0"}),
+        BibEntry("inbook", "inbook", {**common, "booktitle": "Книга", "publisher": "Издательство"}),
+        BibEntry("incollection", "collection", {**common, "booktitle": "Сборник", "publisher": "Издательство"}),
+        BibEntry("online", "online", {"title": "Сайт", "url": "https://example.test", "urldate": "2026-08-20"}),
+        BibEntry("www", "www", {"title": "Сайт", "url": "https://example.test/www", "urldate": "2026-08-20"}),
+        BibEntry("electronic", "electronic", {"title": "Сайт", "url": "https://example.test/e", "urldate": "2026-08-20"}),
+        BibEntry("standard", "standard", {"title": "Стандарт", "year": "2026", "number": "ГОСТ 1"}),
+        BibEntry("patent", "patent", {**common, "number": "RU 1"}),
+        BibEntry("phdthesis", "phd", {**common, "school": "Университет"}),
+        BibEntry("mastersthesis", "masters", {**common, "school": "Университет"}),
+        BibEntry("thesis", "abstract", {**common, "school": "Университет", "type": "Автореферат диссертации"}),
+        BibEntry("techreport", "techreport", {**common, "institution": "Организация"}),
+        BibEntry("report", "report", {**common, "institution": "Организация"}),
+        BibEntry("software", "software", {**common, "number": "2000123456"}),
+    ]
+
+    diagnostics = _validate_bibliography_entries(entries)
+
+    assert "E_BIB_FIELD_MISSING" not in {item.code for item in diagnostics}
+    assert "E_BIB_ISBN_INVALID" not in {item.code for item in diagnostics}
+
+
+def test_validator_checks_stable_keys_identifiers_urls_dates_and_citation_case(tmp_path: Path) -> None:
+    root = write_note(tmp_path, "root.md", "# Root\n\n[@CaseKey; @missing]\n")
+    bibliography = tmp_path / "bibliography.bib"
+    bibliography.write_text(
+        "@article{casekey, author={Иванов, И. И.}, title={Первая}, year={2026}, journal={Журнал}, "
+        "doi={https://doi.org/not-a-doi}, isbn={123}, url={example.test}, urldate={2026-02-30}}\n"
+        "@book{1unstable, author={Петров, П. П.}, title={Книга}, year={2025}, publisher={Издательство}}\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root, bibliography)
+    codes = {item.code for item in diagnostics}
+
+    assert "E_CITATION_KEY_CASE" in codes
+    assert "E_CITATION_MISSING" in codes
+    assert "E_BIB_KEY_UNSTABLE" in codes
+    assert "E_BIB_DOI_INVALID" in codes
+    assert "E_BIB_ISBN_INVALID" in codes
+    assert "E_BIB_URL_INVALID" in codes
+    assert "E_BIB_ACCESS_DATE_INVALID" in codes
+
+
+def test_numeric_csl_collapses_sequences_and_uses_russian_group_punctuation(tmp_path: Path) -> None:
+    pandoc = shutil.which("pandoc")
+    if pandoc is None:
+        pytest.skip("Pandoc is required for citeproc integration")
+    bibliography = tmp_path / "references.bib"
+    bibliography.write_text(
+        "\n".join(
+            f"@article{{source{number}, author={{Иванов, И. И.}}, title={{Источник {number}}}, "
+            f"journal={{Журнал}}, year={{202{number}}}}}"
+            for number in range(1, 7)
+        ),
+        encoding="utf-8",
+    )
+    source = tmp_path / "source.md"
+    source.write_text(
+        "Первая [@source1]. Вторая [@source2]. Третья [@source3]. "
+        "Четвёртая [@source4]. Пятая [@source5]. Шестая [@source6]. "
+        "Группа [@source1; @source3; @source4; @source5].\n",
+        encoding="utf-8",
+    )
+    csl = Path(__file__).parents[1] / "assets" / "csl" / "gost-r-7-0-5-2008-numeric.csl"
+
+    result = subprocess.run(
+        [pandoc, str(source), "--citeproc", "--bibliography", str(bibliography), "--csl", str(csl), "-t", "plain"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert "Группа [1, 3–5]." in result.stdout
 
 
 def test_pdf_transclusion_is_validated_preserved_and_expanded(tmp_path: Path, monkeypatch) -> None:

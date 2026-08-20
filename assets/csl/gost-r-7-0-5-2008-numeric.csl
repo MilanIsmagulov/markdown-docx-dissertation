@@ -180,7 +180,7 @@
     <sort>
       <key variable="citation-number"/>
     </sort>
-    <layout prefix="[" suffix="]" delimiter=",">
+    <layout prefix="[" suffix="]" delimiter=", ">
       <text variable="citation-number"/>
       <!-- Следующее должно неплохо работать для многих случаев, но точность отображения терминов (с., т., ч. и т. п.) определяется файлом русской локали, который не всегда совпадает с ГОСТ. -->
       <group prefix=", " delimiter=" ">

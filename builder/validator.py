@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 
@@ -16,8 +18,24 @@ DIRECTIVE_BLOCK_RE = re.compile(r"^```(?P<kind>table|figure|equation)\s*\n(?P<bo
 OBJECT_REFERENCE_RE = re.compile(r"\{\{(?:ref|number):(?P<kind>table|figure|equation):(?P<id>[A-Za-z0-9_.-]+)}}")
 CITATION_RE = re.compile(r"(?<![\w@])@(?P<key>[A-Za-z0-9_:.+/-]+)")
 BIB_KEY_RE = re.compile(r"@[A-Za-z]+\s*\{\s*(?P<key>[^,\s]+)\s*,", re.IGNORECASE)
+BIB_STABLE_KEY_RE = re.compile(r"[A-Za-z][A-Za-z0-9_:.+/-]*")
+DOI_RE = re.compile(r"10\.\d{4,9}/\S+", re.IGNORECASE)
+ISBN_RE = re.compile(r"(?:97[89])?\d{9}[\dX]", re.IGNORECASE)
 SECTION_RE = re.compile(r"\{\{section:(?P<name>[a-z][a-z0-9_-]*)}}")
 DEFAULT_PLACEHOLDER_MARKERS = ("[указать", "_____", "________", "20__")
+
+
+def _valid_isbn(value: str) -> bool:
+    compact = re.sub(r"[-\s]", "", value).upper()
+    if ISBN_RE.fullmatch(compact) is None:
+        return False
+    if len(compact) == 10:
+        digits = [10 if char == "X" else int(char) for char in compact]
+        return sum((10 - index) * digit for index, digit in enumerate(digits)) % 11 == 0
+    if len(compact) == 13:
+        total = sum((1 if index % 2 == 0 else 3) * int(char) for index, char in enumerate(compact[:12]))
+        return (10 - total % 10) % 10 == int(compact[-1])
+    return False
 
 
 def _heading_key(text: str) -> str:
@@ -519,9 +537,18 @@ def _validate_document_sources(
     all_entries = [*bibliography_entries, *publication_entries]
     if all_entries:
         bib_keys = {entry.key for entry in all_entries}
+        bib_keys_folded = {key.casefold(): key for key in bib_keys}
         for key, location in citations.items():
             if key not in bib_keys:
-                diagnostics.append(Diagnostic("E_CITATION_MISSING", f"citation key '{key}' is absent from bibliography", location))
+                canonical = bib_keys_folded.get(key.casefold())
+                if canonical:
+                    diagnostics.append(Diagnostic(
+                        "E_CITATION_KEY_CASE",
+                        f"citation key '{key}' differs in case from bibliography key '{canonical}'",
+                        location,
+                    ))
+                else:
+                    diagnostics.append(Diagnostic("E_CITATION_MISSING", f"citation key '{key}' is absent from bibliography", location))
         for key in sorted(bib_keys - citations.keys()):
             if report_unused_bibliography and key in {entry.key for entry in bibliography_entries}:
                 diagnostics.append(Diagnostic("W_BIB_UNUSED", f"bibliography entry '{key}' is not cited", severity="warning"))
@@ -673,6 +700,8 @@ def _validate_bibliography_entries(entries: list[BibEntry]) -> list[Diagnostic]:
         "inproceedings": ({"author", "title", "year", "booktitle"}, ()),
         "conference": ({"author", "title", "year", "booktitle"}, ()),
         "book": ({"title", "year", "publisher"}, ({"author", "editor"},)),
+        "inbook": ({"author", "title", "year", "booktitle", "publisher"}, ()),
+        "incollection": ({"author", "title", "year", "booktitle", "publisher"}, ()),
         "online": ({"title", "url", "urldate"}, ()),
         "www": ({"title", "url", "urldate"}, ()),
         "electronic": ({"title", "url", "urldate"}, ()),
@@ -680,13 +709,20 @@ def _validate_bibliography_entries(entries: list[BibEntry]) -> list[Diagnostic]:
         "patent": ({"author", "title", "year", "number"}, ()),
         "phdthesis": ({"author", "title", "year", "school"}, ()),
         "mastersthesis": ({"author", "title", "year", "school"}, ()),
+        "thesis": ({"author", "title", "year", "school", "type"}, ()),
         "techreport": ({"author", "title", "year", "institution"}, ()),
+        "report": ({"author", "title", "year", "institution"}, ()),
         "software": ({"author", "title", "year", "number"}, ()),
     }
     seen_keys: set[str] = set()
     identifiers: dict[tuple[str, str], str] = {}
     records: dict[tuple[str, str, str], str] = {}
     for entry in entries:
+        if BIB_STABLE_KEY_RE.fullmatch(entry.key) is None:
+            diagnostics.append(Diagnostic(
+                "E_BIB_KEY_UNSTABLE",
+                f"bibliography key '{entry.key}' must start with a Latin letter and contain only stable ASCII key characters",
+            ))
         if entry.key.casefold() in seen_keys:
             diagnostics.append(Diagnostic("E_BIB_KEY_DUPLICATE", f"duplicate bibliography key '{entry.key}'"))
         seen_keys.add(entry.key.casefold())
@@ -703,6 +739,19 @@ def _validate_bibliography_entries(entries: list[BibEntry]) -> list[Diagnostic]:
                 )
         if entry.fields.get("url") and not entry.fields.get("urldate"):
             diagnostics.append(Diagnostic("E_BIB_ACCESS_DATE_MISSING", f"URL entry '{entry.key}' requires urldate"))
+        url = entry.fields.get("url", "")
+        if url and (urlparse(url).scheme.casefold() not in {"http", "https"} or not urlparse(url).netloc):
+            diagnostics.append(Diagnostic("E_BIB_URL_INVALID", f"URL entry '{entry.key}' has invalid http(s) URL"))
+        access_date = entry.fields.get("urldate", "")
+        if access_date:
+            try:
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", access_date) is None:
+                    raise ValueError
+                date.fromisoformat(access_date)
+            except ValueError:
+                diagnostics.append(Diagnostic(
+                    "E_BIB_ACCESS_DATE_INVALID", f"entry '{entry.key}' urldate must use a valid YYYY-MM-DD date",
+                ))
         fingerprint = tuple(
             re.sub(r"[^\w]+", "", entry.fields.get(field, "").casefold())
             for field in ("author", "title", "year")
@@ -714,7 +763,15 @@ def _validate_bibliography_entries(entries: list[BibEntry]) -> list[Diagnostic]:
         else:
             records[fingerprint] = entry.key
         for field in ("doi", "isbn"):
-            value = re.sub(r"[^a-z0-9]", "", entry.fields.get(field, "").casefold())
+            raw_value = entry.fields.get(field, "").strip()
+            if field == "doi":
+                raw_value = re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", "", raw_value, flags=re.IGNORECASE)
+                if raw_value and DOI_RE.fullmatch(raw_value) is None:
+                    diagnostics.append(Diagnostic("E_BIB_DOI_INVALID", f"entry '{entry.key}' has invalid DOI"))
+            else:
+                if raw_value and not _valid_isbn(raw_value):
+                    diagnostics.append(Diagnostic("E_BIB_ISBN_INVALID", f"entry '{entry.key}' has invalid ISBN"))
+            value = re.sub(r"[^a-z0-9]", "", raw_value.casefold())
             if not value:
                 continue
             identifier = (field, value)
