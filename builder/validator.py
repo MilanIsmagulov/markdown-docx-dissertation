@@ -77,22 +77,28 @@ def validate_index(
                         diagnostics.append(
                             Diagnostic("W_PDF_LARGE", f"PDF asset exceeds 50 MiB: '{link.target}'", link.location, "warning")
                         )
-                    if link.heading and link.heading.casefold().startswith("page="):
-                        try:
-                            requested_page = int(link.heading.split("=", 1)[1])
-                            from pypdf import PdfReader
+                    try:
+                        from pypdf import PdfReader
+                        from pypdf.errors import PdfReadError
 
-                            page_count = len(PdfReader(asset).pages)
-                            if requested_page < 1 or requested_page > page_count:
-                                diagnostics.append(
-                                    Diagnostic(
-                                        "E_PDF_PAGE_RANGE",
-                                        f"PDF page {requested_page} is outside 1..{page_count}: '{link.target}'",
-                                        link.location,
-                                    )
-                                )
-                        except (ValueError, OSError):
-                            diagnostics.append(Diagnostic("E_PDF_PAGE", f"invalid PDF page selector: '{link.raw}'", link.location))
+                        page_count = len(PdfReader(asset).pages)
+                        if page_count == 0:
+                            diagnostics.append(Diagnostic("E_PDF_NO_PAGES", f"PDF has no pages: '{link.target}'", link.location))
+                        if link.heading:
+                            if not link.heading.casefold().startswith("page="):
+                                raise ValueError("PDF fragment must start with page=")
+                            from .assets import parse_pdf_page_selector
+
+                            parse_pdf_page_selector(link.heading.split("=", 1)[1], page_count)
+                    except PdfReadError as exc:
+                        diagnostics.append(Diagnostic(
+                            "E_PDF_CORRUPT", f"PDF cannot be read: '{link.target}' ({exc})", link.location,
+                        ))
+                    except ValueError as exc:
+                        code = "E_PDF_PAGE_RANGE" if "outside" in str(exc) else "E_PDF_PAGE"
+                        diagnostics.append(Diagnostic(code, f"invalid PDF page selector: '{link.raw}'", link.location))
+                    except OSError:
+                        diagnostics.append(Diagnostic("E_PDF_PAGE", f"invalid PDF page selector: '{link.raw}'", link.location))
                 continue
             target, problem = index.resolve(link)
             if problem:
@@ -785,17 +791,62 @@ def _validate_bibliography_entries(entries: list[BibEntry]) -> list[Diagnostic]:
 
 
 def _validate_appendices(index: ProjectIndex) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
     labels: list[str] = []
-    for note in index.notes:
-        if str(note.metadata.get("type", "")).casefold() != "appendix":
+    appendix_notes = [
+        note for note in index.notes if str(note.metadata.get("type", "")).casefold() == "appendix"
+    ]
+    ordered_notes: list[Note] = []
+    containers = [
+        note for note in index.notes if str(note.metadata.get("type", "")).casefold() == "appendices"
+    ]
+    if containers:
+        for link in containers[0].links:
+            if link.kind != "transclusion":
+                continue
+            target, problem = index.resolve(link)
+            if problem is None and target is not None and target in appendix_notes:
+                if target in ordered_notes:
+                    diagnostics.append(Diagnostic(
+                        "E_APPENDIX_DUPLICATE", f"appendix '{target.title}' is included more than once", link.location,
+                    ))
+                else:
+                    ordered_notes.append(target)
+        for note in appendix_notes:
+            if note not in ordered_notes:
+                diagnostics.append(Diagnostic(
+                    "E_APPENDIX_NOT_INCLUDED", "appendix is not included from the appendices container",
+                    SourceLocation(note.path, 1),
+                ))
+    else:
+        ordered_notes = appendix_notes
+
+    for note in ordered_notes:
+        heading = next((item for item in note.headings if item.level == 1), None)
+        match = re.fullmatch(r"Приложение\s+([А-Я])", heading.text.strip(), re.IGNORECASE) if heading else None
+        if match is None:
+            diagnostics.append(Diagnostic(
+                "E_APPENDIX_HEADING", "appendix requires a level-one heading such as 'ПРИЛОЖЕНИЕ А'",
+                SourceLocation(note.path, 1),
+            ))
             continue
-        match = re.search(r"Приложение\s+([А-Я])", note.title, re.IGNORECASE)
-        if match:
-            labels.append(match.group(1).upper())
+        label = match.group(1).upper()
+        labels.append(label)
+        expected_id = f"appendix:{label.casefold()}"
+        if note.note_id != expected_id:
+            diagnostics.append(Diagnostic(
+                "E_APPENDIX_ID", f"appendix {label} must use stable id '{expected_id}'",
+                SourceLocation(note.path, 1),
+            ))
+        if not any(item.level == 2 and item.text.strip() for item in note.headings):
+            diagnostics.append(Diagnostic(
+                "E_APPENDIX_TITLE", f"appendix {label} requires a level-two title after its designation",
+                heading.location,
+            ))
     expected_letters = list("АБВГДЕЖИКЛМНПРСТУФХЦШЩЭЮЯ")[: len(labels)]
-    if sorted(labels, key=lambda item: expected_letters.index(item) if item in expected_letters else 999) != expected_letters:
-        return [Diagnostic("E_APPENDIX_ORDER", f"appendices must be consecutive: {', '.join(expected_letters)}")]
-    return []
+    if labels != expected_letters:
+        diagnostics.append(Diagnostic("E_APPENDIX_ORDER", f"appendices must be consecutive: {', '.join(expected_letters)}"))
+    return diagnostics
 
 
 def _validate_reachability(index: ProjectIndex, root_note: Path | None) -> list[Diagnostic]:
