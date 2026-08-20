@@ -117,7 +117,10 @@ def process_assets(
     publications_bibliography: Path | None = None,
     conferences_bibliography: Path | None = None,
     statistics_override: dict[str, int] | None = None,
+    object_numbering: str = "chapter",
 ) -> str:
+    if object_numbering not in {"chapter", "global"}:
+        raise ValueError(f"unsupported object numbering profile: {object_numbering}")
     lines = markdown.splitlines()
     counters = {"table": 0, "figure": 0, "equation": 0}
     labels: dict[tuple[str, str], ObjectNumber] = {}
@@ -143,8 +146,9 @@ def process_assets(
             continue
         chapter_match = CHAPTER_RE.match(line)
         if chapter_match is not None:
-            chapter = int(chapter_match["number"])
-            counters = {kind: 0 for kind in counters}
+            if object_numbering == "chapter":
+                chapter = int(chapter_match["number"])
+                counters = {kind: 0 for kind in counters}
             output.append(line)
             index += 1
             continue
@@ -163,7 +167,8 @@ def process_assets(
         if (kind, object_id) in labels:
             raise ValueError(f"duplicate {kind} id: {object_id}")
         counters[kind] += 1
-        number = f"{chapter}.{counters[kind]}" if chapter else str(counters[kind])
+        marker_chapter = chapter if object_numbering == "chapter" else 0
+        number = f"{marker_chapter}.{counters[kind]}" if marker_chapter else str(counters[kind])
         labels[(kind, object_id)] = ObjectNumber(kind, number)
 
         if kind == "table":
@@ -173,7 +178,7 @@ def process_assets(
             rows = _read_rows(source, str(config["sheet"]) if config.get("sheet") else None)
             output.extend(
                 (
-                    f"Таблица [[TARGET:{kind}:{object_id}:{chapter}:{counters[kind]}]] – {caption}",
+                    f"Таблица [[TARGET:{kind}:{object_id}:{marker_chapter}:{counters[kind]}]] – {caption}",
                     "",
                     _markdown_table(rows),
                     "",
@@ -186,7 +191,7 @@ def process_assets(
             width = str(config.get("width", "175mm"))
             output.extend(
                 (
-                    f"![Рисунок [[TARGET:{kind}:{object_id}:{chapter}:{counters[kind]}]] – {caption}]"
+                    f"![Рисунок [[TARGET:{kind}:{object_id}:{marker_chapter}:{counters[kind]}]] – {caption}]"
                     f"(<{source.as_posix()}>){{width={width}}}",
                     "",
                 )
@@ -197,7 +202,7 @@ def process_assets(
                 raise ValueError("equation directive requires latex")
             output.extend(
                 (
-                    f"[[EQUATION:{object_id}:{chapter}:{counters[kind]}]]",
+                    f"[[EQUATION:{object_id}:{marker_chapter}:{counters[kind]}]]",
                     "",
                     "$$",
                     latex,

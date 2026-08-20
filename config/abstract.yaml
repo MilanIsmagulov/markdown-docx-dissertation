@@ -3,6 +3,9 @@ document:
   output: build/abstract-v0.docx
   assembled_markdown: build/abstract-assembled.md
 
+numbering:
+  objects: global
+
 layout:
   page_size: A5
   margins: {left: 15mm, right: 15mm, top: 15mm, bottom: 15mm}

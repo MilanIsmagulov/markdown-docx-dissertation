@@ -165,6 +165,7 @@ def assemble_abstract(project_root: Path) -> int:
             assemble_note(index, root_note), config.content_dir, config.bibliography,
             config.publications_bibliography, config.conferences_bibliography,
             statistics_override=stats,
+            object_numbering=str(abstract_data.get("numbering", {}).get("objects", "global")),
         )
     except ValueError as exc:
         print(f"ERROR E_ABSTRACT_ASSET: {exc}")

@@ -12,6 +12,7 @@ from builder.assets import process_assets
 from builder import assets as assets_module
 from builder.docx_renderer import (
     _apply_section_profiles,
+    _format_numbered_equations,
     _install_cross_reference_fields,
     _prepend_abstract_front_matter,
     _set_font,
@@ -20,6 +21,7 @@ from builder.config import load_document_config
 from builder.cli import archive_previous_versions, next_versioned_output
 from builder.bibliography import publication_counts, read_bib_entries
 from docx import Document
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm
 
@@ -146,7 +148,7 @@ def test_word_cross_references_use_seq_ref_fields_and_bookmarks() -> None:
 
     xml = document._element.xml
     assert "SEQ MdEquationChapter1" in xml
-    assert "REF md_equ_" in xml
+    assert "REF md_dis_equ_" in xml
     assert "w:bookmarkStart" in xml
     assert "w:bookmarkEnd" in xml
     assert "[[REF:" not in xml
@@ -166,8 +168,8 @@ def test_word_object_lists_use_ref_and_pageref_fields() -> None:
 
     xml = document._element.xml
     assert "[[LIST:" not in xml
-    assert "REF md_fig_" in xml
-    assert "PAGEREF md_fig_" in xml
+    assert "REF md_dis_fig_" in xml
+    assert "PAGEREF md_dis_fig_" in xml
     assert "NUMPAGES" in xml
     assert "Схема обработки" in xml
 
@@ -209,6 +211,133 @@ latex: Q = A + B
     assert "![Рисунок [[TARGET:figure:scheme:1:1]] – Схема]" in result
     assert "[[EQUATION:score:1:1]]" in result
     assert "$$\nQ = A + B\n$$" in result
+
+
+def test_abstract_object_numbering_is_global_across_chapter_headings(tmp_path: Path) -> None:
+    markdown = """# Глава 1
+
+```equation
+id: shared-model
+latex: a = b
+```
+
+# Глава 2
+
+См. {{ref:equation:shared-model}} и {{ref:equation:second-model}}.
+
+```equation
+id: second-model
+latex: c = d
+```
+"""
+
+    dissertation = process_assets(markdown, tmp_path, object_numbering="chapter")
+    abstract = process_assets(markdown, tmp_path, object_numbering="global")
+
+    assert "[[EQUATION:shared-model:1:1]]" in dissertation
+    assert "[[EQUATION:second-model:2:1]]" in dissertation
+    assert "[[REF:equation:second-model:2.1]]" in dissertation
+    assert "[[EQUATION:shared-model:0:1]]" in abstract
+    assert "[[EQUATION:second-model:0:2]]" in abstract
+    assert "[[REF:equation:shared-model:1]]" in abstract
+    assert "[[REF:equation:second-model:2]]" in abstract
+
+
+def test_abstract_and_dissertation_use_document_scoped_bookmarks() -> None:
+    dissertation = Document()
+    dissertation.add_paragraph("([[TARGET:equation:shared-model:1:1]])")
+    dissertation.add_paragraph("См. [[REF:equation:shared-model:1.1]].")
+    abstract = Document()
+    abstract.add_paragraph("([[TARGET:equation:shared-model:0:1]])")
+    abstract.add_paragraph("См. [[REF:equation:shared-model:1]].")
+
+    _install_cross_reference_fields(dissertation, "dissertation")
+    _install_cross_reference_fields(abstract, "abstract")
+
+    dissertation_xml = dissertation._element.xml
+    abstract_xml = abstract._element.xml
+    assert "md_dis_equ_" in dissertation_xml
+    assert "MdEquationChapter1" in dissertation_xml
+    assert "md_abs_equ_" in abstract_xml
+    assert "MdAbstractEquation" in abstract_xml
+    assert "MdEquationChapter" not in abstract_xml
+
+
+def test_abstract_equation_tabs_fit_the_a5_body_width() -> None:
+    document = Document()
+    section = document.sections[0]
+    section.page_width = Mm(148)
+    section.left_margin = Mm(15)
+    section.right_margin = Mm(15)
+    document.add_paragraph("[[EQUATION:model:0:1]]")
+    formula = document.add_paragraph()
+    math_para = OxmlElement("m:oMathPara")
+    math_para.append(OxmlElement("m:oMath"))
+    formula._p.append(math_para)
+
+    _format_numbered_equations(document, {"body": {"font": {"family": "Times New Roman"}}})
+
+    tab_positions = formula._p.xpath("./w:pPr/w:tabs/w:tab/@w:pos")
+    expected_width = int(
+        section.page_width.twips - section.left_margin.twips - section.right_margin.twips
+    )
+    assert tab_positions == [str(expected_width // 2), str(expected_width)]
+
+
+def test_validator_scopes_duplicate_object_ids_to_selected_document(tmp_path: Path) -> None:
+    content = tmp_path / "content"
+    content.mkdir()
+    dissertation_root = write_note(tmp_path, "content/dissertation.md", "![[chapter]]\n")
+    abstract_root = write_note(
+        tmp_path,
+        "content/abstract.md",
+        "---\ntype: abstract\n---\n\n![[summary]]\n",
+    )
+    write_note(
+        tmp_path,
+        "content/chapter.md",
+        "```equation\nid: shared-model\nlatex: a = b\n```\n\n{{ref:equation:shared-model}}\n",
+    )
+    write_note(
+        tmp_path,
+        "content/summary.md",
+        "```equation\nid: shared-model\nlatex: c = d\n```\n\n{{ref:equation:shared-model}}\n",
+    )
+    index = build_index(tmp_path, content)
+
+    dissertation_diagnostics = validate_index(index, dissertation_root)
+    abstract_diagnostics = validate_index(index, abstract_root)
+
+    assert not any(item.code == "E_OBJECT_ID_DUPLICATE" for item in dissertation_diagnostics)
+    assert not any(item.code == "E_OBJECT_ID_DUPLICATE" for item in abstract_diagnostics)
+
+
+def test_validator_does_not_resolve_object_reference_from_another_document(tmp_path: Path) -> None:
+    content = tmp_path / "content"
+    content.mkdir()
+    dissertation_root = write_note(tmp_path, "content/dissertation.md", "![[chapter]]\n")
+    abstract_root = write_note(
+        tmp_path,
+        "content/abstract.md",
+        "---\ntype: abstract\n---\n\n![[summary]]\n",
+    )
+    write_note(
+        tmp_path,
+        "content/chapter.md",
+        "```equation\nid: dissertation-only\nlatex: a = b\n```\n",
+    )
+    write_note(
+        tmp_path,
+        "content/summary.md",
+        "См. {{ref:equation:dissertation-only}}.\n",
+    )
+    index = build_index(tmp_path, content)
+
+    dissertation_diagnostics = validate_index(index, dissertation_root)
+    abstract_diagnostics = validate_index(index, abstract_root)
+
+    assert not any(item.code == "E_OBJECT_REFERENCE_MISSING" for item in dissertation_diagnostics)
+    assert any(item.code == "E_OBJECT_REFERENCE_MISSING" for item in abstract_diagnostics)
 
 
 def test_asset_processor_expands_object_and_term_lists(tmp_path: Path) -> None:

@@ -192,9 +192,10 @@ OBJECT_LIST_MARKER_RE = re.compile(r"^\[\[LIST:(?P<kind>figure|table)]]$")
 STAT_FIELD_RE = re.compile(r"\[\[STAT:(?P<name>pages)]]")
 
 
-def _bookmark_name(kind: str, object_id: str) -> str:
-    digest = hashlib.sha1(f"{kind}:{object_id}".encode("utf-8")).hexdigest()[:16]
-    return f"md_{kind[:3]}_{digest}"
+def _bookmark_name(kind: str, object_id: str, scope: str = "dissertation") -> str:
+    digest = hashlib.sha1(f"{scope}:{kind}:{object_id}".encode("utf-8")).hexdigest()[:14]
+    scope_prefix = "abs" if scope == "abstract" else "dis"
+    return f"md_{scope_prefix}_{kind[:3]}_{digest}"
 
 
 def _field_run(instruction: str, display: str, rpr=None) -> OxmlElement:
@@ -267,12 +268,12 @@ def _replace_markers_in_runs(paragraph, pattern: re.Pattern, replacement) -> int
     return replacements
 
 
-def _sequence_nodes(match: re.Match, rpr, bookmark_id: int) -> list[OxmlElement]:
+def _sequence_nodes(match: re.Match, rpr, bookmark_id: int, scope: str) -> list[OxmlElement]:
     kind = match["kind"]
     chapter = int(match["chapter"])
     ordinal = int(match["ordinal"])
     label = {"table": "Table", "figure": "Figure", "equation": "Equation"}[kind]
-    bookmark = _bookmark_name(kind, match["id"])
+    bookmark = _bookmark_name(kind, match["id"], scope)
     start = OxmlElement("w:bookmarkStart")
     start.set(qn("w:id"), str(bookmark_id))
     start.set(qn("w:name"), bookmark)
@@ -281,13 +282,14 @@ def _sequence_nodes(match: re.Match, rpr, bookmark_id: int) -> list[OxmlElement]
     nodes = [start]
     if chapter:
         nodes.append(_text_run(f"{chapter}.", rpr))
-    sequence_name = f"Md{label}Chapter{chapter}"
+    sequence_name = f"MdAbstract{label}" if scope == "abstract" else f"Md{label}Chapter{chapter}"
     nodes.append(_field_run(f"SEQ {sequence_name} \\* ARABIC", str(ordinal), rpr))
     nodes.append(end)
     return nodes
 
 
-def _install_cross_reference_fields(document: Document) -> None:
+def _install_cross_reference_fields(document: Document, document_kind: str = "dissertation") -> None:
+    scope = "abstract" if document_kind == "abstract" else "dissertation"
     bookmark_id = 1000
     targets: set[tuple[str, str]] = set()
     captions: dict[str, list[tuple[str, str, str]]] = {"figure": [], "table": []}
@@ -299,7 +301,11 @@ def _install_cross_reference_fields(document: Document) -> None:
             if match["kind"] in captions:
                 caption = paragraph_text[match.end() :].strip().lstrip("–-").strip()
                 captions[match["kind"]].append(
-                    (_bookmark_name(match["kind"], match["id"]), f"{match['chapter']}.{match['ordinal']}", caption)
+                    (
+                        _bookmark_name(match["kind"], match["id"], scope),
+                        f"{match['chapter']}.{match['ordinal']}" if int(match["chapter"]) else match["ordinal"],
+                        caption,
+                    )
                 )
 
         def replace_target(match: re.Match, rpr):
@@ -308,7 +314,7 @@ def _install_cross_reference_fields(document: Document) -> None:
             if key in targets:
                 raise ValueError(f"duplicate cross-reference target: {match['kind']}:{match['id']}")
             targets.add(key)
-            nodes = _sequence_nodes(match, rpr, bookmark_id)
+            nodes = _sequence_nodes(match, rpr, bookmark_id, scope)
             bookmark_id += 1
             return nodes
 
@@ -353,7 +359,7 @@ def _install_cross_reference_fields(document: Document) -> None:
             if key not in targets:
                 raise ValueError(f"unknown cross-reference target: {match['kind']}:{match['id']}")
             kind = match["kind"]
-            bookmark = _bookmark_name(kind, match["id"])
+            bookmark = _bookmark_name(kind, match["id"], scope)
             display_number = match["number"]
             prefix = ""
             suffix = ""
@@ -385,7 +391,14 @@ def _install_cross_reference_fields(document: Document) -> None:
         description = node.get("descr", "")
         node.set(
             "descr",
-            TARGET_RE.sub(lambda match: f"{match['chapter']}.{match['ordinal']}", description),
+            TARGET_RE.sub(
+                lambda match: (
+                    f"{match['chapter']}.{match['ordinal']}"
+                    if int(match["chapter"])
+                    else match["ordinal"]
+                ),
+                description,
+            ),
         )
 
 
@@ -514,10 +527,12 @@ def _format_numbered_equations(document: Document, styles: dict) -> None:
         r"^\[\[EQUATION:(?P<id>[A-Za-z0-9_.-]+):(?P<chapter>\d+):(?P<ordinal>\d+)]]$"
     )
     family = styles["body"]["font"]["family"]
-    usable_width_mm = 210 - _number(styles["document"]["margins"]["left"], "mm") - _number(
-        styles["document"]["margins"]["right"], "mm"
+    section = document.sections[-1]
+    usable_twips = int(
+        section.page_width.twips
+        - section.left_margin.twips
+        - section.right_margin.twips
     )
-    usable_twips = int(Mm(usable_width_mm).twips)
 
     paragraphs = list(document.paragraphs)
     for marker_index, marker in enumerate(paragraphs):
@@ -1232,7 +1247,7 @@ def render_docx(
     _request_field_updates(document)
     _format_numbered_objects(document, styles)
     _format_numbered_equations(document, styles)
-    _install_cross_reference_fields(document)
+    _install_cross_reference_fields(document, document_kind)
     _format_pdf_page_breaks(document)
     if document_kind == "dissertation":
         _apply_section_profiles(document, project_root, styles)
