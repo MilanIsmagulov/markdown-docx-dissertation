@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from .bibliography import publication_counts, read_bib_entries
+from .bibliography import completed_entries, publication_counts, read_bib_entries
 
 
 DIRECTIVE_RE = re.compile(r"^```(?P<kind>table|figure|equation)\s*$")
@@ -20,7 +20,7 @@ TERMS_LIST_RE = re.compile(r"\{\{list:(?P<kind>abbreviations|symbols|glossary)}}
 CONFERENCE_LIST_RE = re.compile(r"\{\{list:conferences}}")
 PUBLICATION_LIST_RE = re.compile(r"\{\{list:publications}}")
 STAT_RE = re.compile(r"\{\{stat:(?P<name>[a-z_]+)}}")
-STAT_PHRASE_RE = re.compile(r"\{\{stat_phrase:(?P<name>[a-z_]+)}}")
+STAT_PHRASE_RE = re.compile(r"\{\{stat_phrase:(?P<name>[a-z_]+)(?::(?P<case>[a-z]+))?}}")
 SECTION_RE = re.compile(r"\{\{section:(?P<name>[a-z][a-z0-9_-]*)}}")
 CHAPTER_RE = re.compile(r"^#\s+Глава\s+(?P<number>\d+)\b", re.IGNORECASE)
 PDF_EMBED_RE = re.compile(
@@ -238,7 +238,7 @@ def process_assets(
 
     assembled = TERMS_LIST_RE.sub(replace_terms, assembled)
     conferences = sorted(
-        read_bib_entries(conferences_bibliography), key=lambda entry: entry.fields.get("eventdate", "")
+        completed_entries(read_bib_entries(conferences_bibliography)), key=lambda entry: entry.fields.get("eventdate", "")
     )
 
     def conference_item(entry) -> str:
@@ -276,9 +276,19 @@ def process_assets(
         "publications": ("печатная работа", "печатные работы", "печатных работ"),
         "publications_vak": ("статья", "статьи", "статей"),
         "publications_scopus_wos": ("публикация", "публикации", "публикаций"),
+        "publications_scopus": ("публикация", "публикации", "публикаций"),
+        "publications_wos": ("публикация", "публикации", "публикаций"),
         "publications_other": ("работа", "работы", "работ"),
         "patents": ("патент", "патента", "патентов"),
         "software_registrations": ("свидетельство", "свидетельства", "свидетельств"),
+        "pages": ("страница", "страницы", "страниц"),
+    }
+    case_nouns = {
+        ("chapters", "acc"): ("главу", "главы", "глав"),
+        ("figures", "acc"): ("рисунок", "рисунка", "рисунков"),
+        ("tables", "acc"): ("таблицу", "таблицы", "таблиц"),
+        ("appendices", "acc"): ("приложение", "приложения", "приложений"),
+        ("conferences", "prep"): ("мероприятии", "мероприятиях", "мероприятиях"),
     }
 
     def inflect(number: int, forms: tuple[str, str, str]) -> str:
@@ -291,15 +301,20 @@ def process_assets(
         return f"{number} {form}"
 
     assembled = STAT_PHRASE_RE.sub(
-        lambda match: inflect(stats[match["name"]], nouns[match["name"]])
-        if match["name"] in stats and match["name"] in nouns
+        lambda match: inflect(
+            stats[match["name"]],
+            case_nouns.get((match["name"], match["case"] or "nom"), nouns[match["name"]]),
+        )
+        if match["name"] in stats
+        and match["name"] in nouns
+        and (not match["case"] or match["case"] == "nom" or (match["name"], match["case"]) in case_nouns)
         else (_ for _ in ()).throw(ValueError(f"unknown document statistic phrase: {match['name']}")),
         assembled,
     )
 
     def replace_stat(match: re.Match[str]) -> str:
         name = match["name"]
-        if name == "pages":
+        if name == "pages" and name not in (statistics_override or {}):
             return "[[STAT:pages]]"
         if name not in stats:
             raise ValueError(f"unknown document statistic: {name}")
@@ -322,7 +337,7 @@ def process_assets(
             parts.append(f"DOI: {fields['doi']}")
         return ". ".join(item.rstrip(".") for item in parts if item) + "."
 
-    publications = read_bib_entries(publications_bibliography)
+    publications = completed_entries(read_bib_entries(publications_bibliography))
     groups = (
         ("Публикации в изданиях, рекомендованных ВАК РФ", [e for e in publications if "vak" in e.keywords]),
         ("Публикации в изданиях, индексируемых в Scopus и Web of Science", [e for e in publications if e.keywords & {"scopus", "wos", "web-of-science"}]),

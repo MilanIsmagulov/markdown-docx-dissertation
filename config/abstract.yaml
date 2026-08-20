@@ -6,6 +6,11 @@ document:
 numbering:
   objects: global
 
+statistics:
+  # Optional authoritative PDF. If omitted, Word or LibreOffice measures the
+  # final dissertation DOCX during `build`/`build-all`.
+  dissertation_pdf:
+
 validation:
   mode: draft
   public_profile: true

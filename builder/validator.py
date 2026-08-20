@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from .bibliography import BibEntry, read_bib_entries
+from .bibliography import BibEntry, completed_entries, read_bib_entries
 from .model import Diagnostic, Note, SourceLocation
 from .resolver import ProjectIndex
 
@@ -394,8 +394,8 @@ def _validate_document_sources(
         if (kind, object_id) not in objects:
             diagnostics.append(Diagnostic("E_OBJECT_REFERENCE_MISSING", f"unknown {kind} reference '{object_id}'", location))
 
-    bibliography_entries = read_bib_entries(bibliography)
-    publication_entries = read_bib_entries(publications_bibliography)
+    bibliography_entries = completed_entries(read_bib_entries(bibliography))
+    publication_entries = completed_entries(read_bib_entries(publications_bibliography))
     all_entries = [*bibliography_entries, *publication_entries]
     if all_entries:
         bib_keys = {entry.key for entry in all_entries}
