@@ -26,7 +26,7 @@ STAT_PHRASE_RE = re.compile(r"\{\{stat_phrase:(?P<name>[a-z_]+)(?::(?P<case>[a-z
 SECTION_RE = re.compile(r"\{\{section:(?P<name>[a-z][a-z0-9_-]*)}}")
 CHAPTER_RE = re.compile(r"^#\s+Глава\s+(?P<number>\d+)\b", re.IGNORECASE)
 PDF_EMBED_RE = re.compile(
-    r"^\s*!\[\[(?P<target>[^]|#]+\.pdf)(?:#page=(?P<page>\d+))?(?:\|(?P<width>\d+(?:\.\d+)?mm))?]]\s*$",
+    r"^\s*!\[\[(?P<target>[^]|#]+\.pdf)(?:#page=(?P<pages>[^]|]+))?(?:\|(?P<width>\d+(?:\.\d+)?mm))?]]\s*$",
     re.IGNORECASE,
 )
 
@@ -172,7 +172,26 @@ def _load_directive(lines: list[str], start: int) -> tuple[dict, int]:
     return config, closing + 1
 
 
-def _render_pdf_pages(source: Path, content_dir: Path, page: int | None = None) -> list[Path]:
+def parse_pdf_page_selector(selector: str | None, page_count: int | None = None) -> list[int] | None:
+    if selector is None:
+        return None
+    value = selector.strip()
+    if not value or re.fullmatch(r"\d+(?:\s*-\s*\d+)?(?:\s*,\s*\d+(?:\s*-\s*\d+)?)*", value) is None:
+        raise ValueError("PDF page selector must look like 2, 4-6")
+    pages: list[int] = []
+    for part in value.split(","):
+        bounds = [int(item.strip()) for item in part.split("-", 1)]
+        first, last = (bounds[0], bounds[0]) if len(bounds) == 1 else bounds
+        if first < 1 or last < first:
+            raise ValueError(f"invalid PDF page range: {part.strip()}")
+        pages.extend(range(first, last + 1))
+    pages = sorted(set(pages))
+    if page_count is not None and pages[-1] > page_count:
+        raise ValueError(f"PDF page {pages[-1]} is outside 1..{page_count}")
+    return pages
+
+
+def _render_pdf_pages(source: Path, content_dir: Path, pages: list[int] | None = None) -> list[Path]:
     pdftoppm = shutil.which("pdftoppm")
     if pdftoppm is None:
         raise ValueError("PDF embedding requires Poppler's pdftoppm executable")
@@ -188,20 +207,21 @@ def _render_pdf_pages(source: Path, content_dir: Path, page: int | None = None) 
     for stale_page in cache.glob("page-*.png"):
         stale_page.unlink()
     command = [pdftoppm, "-png", "-r", "200"]
-    if page is not None:
-        command.extend(["-f", str(page), "-l", str(page)])
+    if pages is not None:
+        command.extend(["-f", str(min(pages)), "-l", str(max(pages))])
     command.extend([str(source), str(prefix)])
     try:
         subprocess.run(command, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr.strip() if exc.stderr else str(exc)
         raise ValueError(f"failed to render PDF {source}: {detail}") from exc
-    pages = sorted(cache.glob("page-*.png"), key=lambda path: int(path.stem.rsplit("-", 1)[1]))
-    if page is not None:
-        pages = [path for path in pages if int(path.stem.rsplit("-", 1)[1]) == page]
-    if not pages:
+    rendered_pages = sorted(cache.glob("page-*.png"), key=lambda path: int(path.stem.rsplit("-", 1)[1]))
+    if pages is not None:
+        requested = set(pages)
+        rendered_pages = [path for path in rendered_pages if int(path.stem.rsplit("-", 1)[1]) in requested]
+    if not rendered_pages:
         raise ValueError(f"PDF produced no pages: {source}")
-    return pages
+    return rendered_pages
 
 
 def process_assets(
@@ -238,8 +258,8 @@ def process_assets(
             source = (content_dir / pdf_match["target"].strip()).resolve()
             if not source.is_relative_to(content_dir.resolve()) or not source.is_file():
                 raise ValueError(f"PDF asset not found: {source}")
-            requested_page = int(pdf_match["page"]) if pdf_match["page"] else None
-            pages = _render_pdf_pages(source, content_dir, requested_page)
+            requested_pages = parse_pdf_page_selector(pdf_match["pages"])
+            pages = _render_pdf_pages(source, content_dir, requested_pages)
             width = pdf_match["width"] or "175mm"
             for page_index, page_path in enumerate(pages):
                 if page_index:

@@ -11,7 +11,7 @@ from builder.parser import parse_note
 from builder.resolver import build_index
 from builder.validator import _validate_bibliography_entries, validate_index
 from builder.assembler import assemble_note
-from builder.assets import process_assets
+from builder.assets import parse_pdf_page_selector, process_assets
 from builder import assets as assets_module
 from builder.docx_renderer import (
     _apply_section_profiles,
@@ -855,7 +855,11 @@ def test_pdf_transclusion_is_validated_preserved_and_expanded(tmp_path: Path, mo
     write_note(tmp_path, "appendix.md", "# ПРИЛОЖЕНИЕ А\n\n![[assets/document.pdf]]\n")
     pdf = tmp_path / "content" / "assets" / "document.pdf"
     pdf.parent.mkdir(parents=True)
-    pdf.write_bytes(b"%PDF-demo")
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.add_blank_page(width=100, height=100)
+    with pdf.open("wb") as stream:
+        writer.write(stream)
     index = build_index(tmp_path, tmp_path / "content")
     assert validate_index(index, root) == []
     root_note = next(note for note in index.notes if note.path == root)
@@ -872,6 +876,81 @@ def test_pdf_transclusion_is_validated_preserved_and_expanded(tmp_path: Path, mo
     assert "[[PDF_PAGE_BREAK]]" in expanded
     assert "page-2.png" in expanded
     assert "{width=175mm}" in expanded
+
+
+def test_pdf_page_selector_supports_pages_ranges_and_deduplication() -> None:
+    assert parse_pdf_page_selector("2, 4-6, 5", page_count=6) == [2, 4, 5, 6]
+
+    with pytest.raises(ValueError, match="outside"):
+        parse_pdf_page_selector("2-7", page_count=6)
+    with pytest.raises(ValueError, match="range"):
+        parse_pdf_page_selector("4-2")
+    with pytest.raises(ValueError, match="must look"):
+        parse_pdf_page_selector("two")
+
+
+def test_pdf_page_range_is_validated_and_expanded_in_declared_order(tmp_path: Path, monkeypatch) -> None:
+    root = write_note(tmp_path, "root.md", "![[appendix]]\n")
+    write_note(
+        tmp_path,
+        "appendix.md",
+        "---\nid: appendix:а\ntype: appendix\n---\n\n# ПРИЛОЖЕНИЕ А\n\n## Документ\n\n"
+        "![[assets/document.pdf#page=2,4-5|160mm]]\n",
+    )
+    pdf = tmp_path / "content" / "assets" / "document.pdf"
+    pdf.parent.mkdir(parents=True)
+    writer = PdfWriter()
+    for _ in range(5):
+        writer.add_blank_page(width=100, height=100)
+    with pdf.open("wb") as stream:
+        writer.write(stream)
+
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
+    assert not [item for item in diagnostics if item.severity == "error"]
+
+    rendered = []
+    for number in (2, 4, 5):
+        page = tmp_path / f"page-{number}.png"
+        page.write_bytes(b"png")
+        rendered.append(page)
+    captured: list[list[int] | None] = []
+
+    def fake_render(source: Path, content: Path, pages: list[int] | None = None) -> list[Path]:
+        captured.append(pages)
+        return rendered
+
+    monkeypatch.setattr(assets_module, "_render_pdf_pages", fake_render)
+    expanded = process_assets("![[assets/document.pdf#page=2,4-5|160mm]]", tmp_path / "content")
+
+    assert captured == [[2, 4, 5]]
+    assert expanded.count("[[PDF_PAGE_BREAK]]") == 2
+    assert all(f"page-{number}.png" in expanded for number in (2, 4, 5))
+    assert "{width=160mm}" in expanded
+
+
+def test_validator_reports_corrupt_and_zero_page_pdf_files(tmp_path: Path) -> None:
+    root = write_note(
+        tmp_path, "root.md",
+        "![[assets/empty.pdf]]\n![[assets/corrupt.pdf]]\n![[assets/empty-pages.pdf]]\n![[assets/large.pdf]]\n",
+    )
+    assets = tmp_path / "content" / "assets"
+    assets.mkdir(parents=True)
+    (assets / "empty.pdf").write_bytes(b"")
+    (assets / "corrupt.pdf").write_bytes(b"not a PDF")
+    with (assets / "large.pdf").open("wb") as stream:
+        stream.seek(51 * 1024 * 1024)
+        stream.write(b"not a PDF")
+    writer = PdfWriter()
+    with (assets / "empty-pages.pdf").open("wb") as stream:
+        writer.write(stream)
+
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
+    codes = {item.code for item in diagnostics}
+
+    assert "E_PDF_EMPTY" in codes
+    assert "E_PDF_CORRUPT" in codes
+    assert "E_PDF_NO_PAGES" in codes
+    assert "W_PDF_LARGE" in codes
 
 
 def test_section_profile_marker_is_preserved_for_docx_renderer(tmp_path: Path) -> None:
@@ -1009,6 +1088,70 @@ def test_validator_reports_missing_pdf_asset(tmp_path: Path) -> None:
     root = write_note(tmp_path, "root.md", "![[assets/missing.pdf]]\n")
     diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
     assert {item.code for item in diagnostics} == {"E_ASSET_MISSING"}
+
+
+def test_validator_preserves_appendix_order_stable_ids_and_titles(tmp_path: Path) -> None:
+    root = write_note(tmp_path, "root.md", "![[01-b]]\n![[02-a]]\n![[03-c]]\n")
+    write_note(
+        tmp_path, "01-b.md",
+        "---\nid: appendix:б\ntype: appendix\n---\n\n# ПРИЛОЖЕНИЕ Б\n\n## Второе приложение\n",
+    )
+    write_note(
+        tmp_path, "02-a.md",
+        "---\nid: appendix:wrong\ntype: appendix\n---\n\n# ПРИЛОЖЕНИЕ А\n",
+    )
+    write_note(
+        tmp_path, "03-c.md",
+        "---\nid: appendix:в\ntype: appendix\n---\n\n# ПРИЛОЖЕНИЕ В\n\n## Третье приложение\n",
+    )
+
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
+    codes = {item.code for item in diagnostics}
+
+    assert "E_APPENDIX_ORDER" in codes
+    assert "E_APPENDIX_ID" in codes
+    assert "E_APPENDIX_TITLE" in codes
+
+
+def test_appendix_order_follows_container_links_not_filenames(tmp_path: Path) -> None:
+    root = write_note(tmp_path, "root.md", "![[container]]\n")
+    write_note(
+        tmp_path, "container.md",
+        "---\nid: section:appendices\ntype: appendices\n---\n\n![[z-a]]\n![[a-b]]\n",
+    )
+    write_note(
+        tmp_path, "z-a.md",
+        "---\nid: appendix:а\ntype: appendix\n---\n\n# ПРИЛОЖЕНИЕ А\n\n## Первое\n",
+    )
+    write_note(
+        tmp_path, "a-b.md",
+        "---\nid: appendix:б\ntype: appendix\n---\n\n# ПРИЛОЖЕНИЕ Б\n\n## Второе\n",
+    )
+
+    diagnostics = validate_index(build_index(tmp_path, tmp_path / "content"), root)
+
+    assert "E_APPENDIX_ORDER" not in {item.code for item in diagnostics}
+
+
+def test_scaffold_supports_multiple_consecutive_appendices(tmp_path: Path) -> None:
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "metadata.yaml").write_text(
+        yaml.safe_dump(
+            {"structure": {"chapters": 1, "paragraphs_per_chapter": 1, "appendices": 5}},
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+
+    scaffold(tmp_path)
+
+    appendix_index = (tmp_path / "content" / "99 Appendices" / "Приложения.md").read_text(encoding="utf-8")
+    for label in "АБВГД":
+        assert f"![[99 Appendices/Приложение {label}]]" in appendix_index
+        appendix = (tmp_path / "content" / "99 Appendices" / f"Приложение {label}.md").read_text(encoding="utf-8")
+        assert f"id: appendix:{label.casefold()}" in appendix
+        assert f"# ПРИЛОЖЕНИЕ {label}" in appendix
 
 
 def test_scaffold_creates_nested_obsidian_structure_and_is_idempotent(tmp_path: Path) -> None:
