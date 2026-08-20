@@ -448,6 +448,7 @@ def _validate_document_sources(
     objects: dict[tuple[str, str], SourceLocation] = {}
     references: list[tuple[str, str, SourceLocation]] = []
     citations: dict[str, SourceLocation] = {}
+    equation_symbols: dict[str, SourceLocation] = {}
     allowed_extensions = {"table": {".csv", ".tsv", ".xlsx"}, "figure": {".png", ".jpg", ".jpeg", ".svg"}}
 
     for note in index.notes if notes is None else notes:
@@ -483,8 +484,26 @@ def _validate_document_sources(
                     diagnostics.append(Diagnostic("E_ASSET_TYPE", f"unsupported {kind} asset type: '{source.suffix}'", location))
                 if kind == "table":
                     diagnostics.extend(_validate_table_config(config, source, location))
-            elif not str(config.get("latex", "")).strip():
-                diagnostics.append(Diagnostic("E_EQUATION_EMPTY", f"equation '{object_id}' requires latex", location))
+            else:
+                from .assets import _equation_latex, _equation_where
+
+                try:
+                    _equation_latex(config)
+                except ValueError as exc:
+                    diagnostics.append(Diagnostic("E_EQUATION_CONFIG", f"equation '{object_id}': {exc}", location))
+                declared = config.get("symbols", [])
+                if declared is None:
+                    declared = []
+                if not isinstance(declared, list) or not all(str(symbol).strip() for symbol in declared):
+                    diagnostics.append(Diagnostic("E_EQUATION_SYMBOLS", f"equation '{object_id}' symbols must be a list", location))
+                    declared = []
+                try:
+                    _, where_symbols = _equation_where(config, _term_symbol_definitions(index.root))
+                except ValueError as exc:
+                    diagnostics.append(Diagnostic("E_EQUATION_WHERE", f"equation '{object_id}': {exc}", location))
+                    where_symbols = []
+                for symbol in [*[str(item).strip() for item in declared], *where_symbols]:
+                    equation_symbols.setdefault(symbol, location)
 
         for match in OBJECT_REFERENCE_RE.finditer(note.body):
             references.append((match["kind"], match["id"], SourceLocation(note.path, _line_for_offset(note.body, match.start()))))
@@ -507,6 +526,61 @@ def _validate_document_sources(
             if report_unused_bibliography and key in {entry.key for entry in bibliography_entries}:
                 diagnostics.append(Diagnostic("W_BIB_UNUSED", f"bibliography entry '{key}' is not cited", severity="warning"))
         diagnostics.extend(_validate_bibliography_entries(all_entries))
+    if equation_symbols:
+        diagnostics.extend(_validate_equation_symbols(index.root, equation_symbols, report_unused_bibliography))
+    return diagnostics
+
+
+def _term_symbol_definitions(project_root: Path) -> dict[str, str]:
+    path = project_root / "config" / "terms.yaml"
+    if not path.is_file():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    except yaml.YAMLError:
+        return {}
+    entries = data.get("symbols", []) if isinstance(data, dict) else []
+    return {
+        str(entry.get("term", "")).strip(): str(entry.get("definition", "")).strip()
+        for entry in entries
+        if isinstance(entry, dict) and str(entry.get("term", "")).strip()
+    }
+
+
+def _validate_equation_symbols(
+    project_root: Path, used: dict[str, SourceLocation], report_unused: bool,
+) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    definitions = _term_symbol_definitions(project_root)
+    terms_path = project_root / "config" / "terms.yaml"
+    if not definitions:
+        return [Diagnostic(
+            "E_SYMBOLS_CONFIG", "equations declare symbols but config/terms.yaml has no symbol definitions",
+            SourceLocation(terms_path, 1),
+        )]
+    raw = yaml.safe_load(terms_path.read_text(encoding="utf-8-sig")) or {}
+    entries = raw.get("symbols", []) if isinstance(raw, dict) else []
+    seen: set[str] = set()
+    for entry in entries:
+        symbol = str(entry.get("term", "")).strip() if isinstance(entry, dict) else ""
+        if symbol and symbol in seen:
+            diagnostics.append(Diagnostic(
+                "E_SYMBOL_DUPLICATE", f"symbol '{symbol}' is defined more than once",
+                SourceLocation(terms_path, 1),
+            ))
+        seen.add(symbol)
+    for symbol, location in used.items():
+        if symbol not in definitions or not definitions[symbol]:
+            diagnostics.append(Diagnostic(
+                "E_SYMBOL_UNDEFINED", f"equation symbol '{symbol}' has no definition in config/terms.yaml",
+                location, hint=f"Add term: {symbol} to the symbols list.",
+            ))
+    if report_unused:
+        for symbol in definitions.keys() - used.keys():
+            diagnostics.append(Diagnostic(
+                "W_SYMBOL_UNUSED", f"symbol '{symbol}' is not declared by a numbered equation",
+                SourceLocation(terms_path, 1), "warning", "Remove it or add it to an equation symbols list.",
+            ))
     return diagnostics
 
 

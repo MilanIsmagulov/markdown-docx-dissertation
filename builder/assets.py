@@ -37,6 +37,54 @@ class ObjectNumber:
     number: str
 
 
+def _equation_latex(config: dict) -> str:
+    latex = str(config.get("latex", "")).strip()
+    lines = config.get("lines")
+    layout = str(config.get("layout", "plain")).casefold()
+    if lines is not None:
+        if not isinstance(lines, list) or not lines or not all(str(line).strip() for line in lines):
+            raise ValueError("equation lines must be a non-empty list")
+        separator = r" \\ "
+        body = separator.join(str(line).strip() for line in lines)
+        if layout == "aligned":
+            latex = rf"\begin{{aligned}} {body} \end{{aligned}}"
+        elif layout == "cases":
+            latex = rf"\begin{{cases}} {body} \end{{cases}}"
+        elif layout == "plain":
+            latex = body
+        else:
+            raise ValueError(f"unsupported equation layout: {layout}")
+    elif layout not in {"plain", "aligned", "cases"}:
+        raise ValueError(f"unsupported equation layout: {layout}")
+    if not latex:
+        raise ValueError("equation directive requires latex or lines")
+    return latex
+
+
+def _equation_where(config: dict, definitions: dict[str, str] | None = None) -> tuple[list[str], list[str]]:
+    where = config.get("where", [])
+    if where is None:
+        return [], []
+    if not isinstance(where, list):
+        raise ValueError("equation where must be a list")
+    lines: list[str] = []
+    symbols: list[str] = []
+    for entry in where:
+        if isinstance(entry, str):
+            symbol = entry.strip()
+            definition = (definitions or {}).get(symbol, "")
+        elif isinstance(entry, dict):
+            symbol = str(entry.get("symbol", "")).strip()
+            definition = str(entry.get("definition", "")).strip() or (definitions or {}).get(symbol, "")
+        else:
+            raise ValueError("each equation where entry must be a symbol or mapping")
+        if not symbol or not definition:
+            raise ValueError("each equation where entry requires symbol and definition")
+        symbols.append(symbol)
+        lines.append(f"${symbol}$ — {definition}")
+    return lines, symbols
+
+
 def _range_bounds(cell_range: str | None, rows: list[list[str]]) -> tuple[int, int, int, int]:
     width = max((len(row) for row in rows), default=0)
     if not cell_range:
@@ -169,8 +217,16 @@ def process_assets(
     if object_numbering not in {"chapter", "global"}:
         raise ValueError(f"unsupported object numbering profile: {object_numbering}")
     lines = markdown.splitlines()
+    terms_path = content_dir.parent / "config" / "terms.yaml"
+    terms_data = yaml.safe_load(terms_path.read_text(encoding="utf-8-sig")) if terms_path.is_file() else {}
+    symbol_definitions = {
+        str(entry.get("term", "")).strip(): str(entry.get("definition", "")).strip()
+        for entry in (terms_data or {}).get("symbols", [])
+        if isinstance(entry, dict)
+    }
     counters = {"table": 0, "figure": 0, "equation": 0}
     labels: dict[tuple[str, str], ObjectNumber] = {}
+    used_symbols: list[str] = []
     chapter = 0
     output: list[str] = []
     index = 0
@@ -272,9 +328,16 @@ def process_assets(
                 )
             )
         else:
-            latex = str(config.get("latex", "")).strip()
-            if not latex:
-                raise ValueError("equation directive requires latex")
+            latex = _equation_latex(config)
+            where_lines, where_symbols = _equation_where(config, symbol_definitions)
+            declared_symbols = config.get("symbols", [])
+            if declared_symbols is None:
+                declared_symbols = []
+            if not isinstance(declared_symbols, list) or not all(str(symbol).strip() for symbol in declared_symbols):
+                raise ValueError("equation symbols must be a list of non-empty strings")
+            for symbol in [*[str(item).strip() for item in declared_symbols], *where_symbols]:
+                if symbol not in used_symbols:
+                    used_symbols.append(symbol)
             output.extend(
                 (
                     f"[[EQUATION:{object_id}:{marker_chapter}:{counters[kind]}]]",
@@ -285,6 +348,11 @@ def process_assets(
                     "",
                 )
             )
+            if where_lines:
+                output.extend(("[[WHERE_BEGIN]]", "", "где", ""))
+                for where_line in where_lines:
+                    output.extend((where_line, ""))
+                output.extend(("[[WHERE_END]]", ""))
 
     assembled = "\n".join(output)
     assembled = OBJECT_LIST_RE.sub(
@@ -301,7 +369,11 @@ def process_assets(
         if not isinstance(entries, list):
             raise ValueError(f"terms.{match['kind']} must be a list")
         rows = [["Термин" if match["kind"] == "glossary" else "Обозначение", "Определение" if match["kind"] == "glossary" else "Расшифровка"]]
-        for entry in entries:
+        selected_entries = entries
+        if match["kind"] == "symbols" and used_symbols:
+            definitions = {str(entry.get("term", "")).strip(): entry for entry in entries if isinstance(entry, dict)}
+            selected_entries = [definitions[symbol] for symbol in used_symbols if symbol in definitions]
+        for entry in selected_entries:
             if (
                 not isinstance(entry, dict)
                 or not str(entry.get("term", "")).strip()
