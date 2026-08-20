@@ -11,6 +11,7 @@ from .config import load_document_config
 from .assembler import assemble_note
 from .assets import process_assets
 from .docx_renderer import render_docx
+from .print_release import archive_previous_release_pdfs, build_print_release
 from .resolver import build_index
 from .scaffold import scaffold
 from .statistics import (
@@ -276,6 +277,34 @@ def build_abstract(project_root: Path, validation_mode: str | None = None) -> in
     return 0
 
 
+def build_abstract_release(project_root: Path, validation_mode: str | None = None) -> int:
+    if build_abstract(project_root, validation_mode):
+        return 1
+    abstract_data = _load_abstract_config(project_root)
+    document = abstract_data.get("document", {})
+    configured_output = project_root / str(document.get("output", "build/abstract.docx"))
+    match = VERSIONED_DOCX_RE.match(configured_output.name)
+    if match is None:
+        print(f"ERROR E_ABSTRACT_RELEASE: output must be a DOCX file: {configured_output}")
+        return 1
+    candidates = list(configured_output.parent.glob(f"{match['base']}-v*.docx"))
+    if not candidates:
+        print("ERROR E_ABSTRACT_RELEASE: built abstract DOCX was not found")
+        return 1
+    current = max(candidates, key=lambda path: int(VERSIONED_DOCX_RE.match(path.name)["version"]))
+    try:
+        pdf, booklet = build_print_release(current)
+        archived = archive_previous_release_pdfs(current)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"ERROR E_ABSTRACT_RELEASE: {exc}")
+        return 1
+    print(f"Built abstract PDF: {pdf.relative_to(project_root)}")
+    print(f"Built abstract booklet: {booklet.relative_to(project_root)}")
+    if archived:
+        print(f"Archived {len(archived)} previous abstract PDF(s)")
+    return 0
+
+
 def build_all(project_root: Path, validation_mode: str | None = None) -> int:
     if build(project_root, require_statistics=True):
         return 1
@@ -295,6 +324,8 @@ def main(argv: list[str] | None = None) -> int:
     abstract_assembler.add_argument("--mode", choices=("draft", "final"))
     abstract_builder = subparsers.add_parser("build-abstract", help="assemble and render abstract DOCX")
     abstract_builder.add_argument("--mode", choices=("draft", "final"))
+    release_builder = subparsers.add_parser("build-abstract-release", help="build abstract DOCX, A5 PDF and A4 booklet")
+    release_builder.add_argument("--mode", choices=("draft", "final"))
     full_builder = subparsers.add_parser("build-all", help="build dissertation, collect final statistics, then build abstract")
     full_builder.add_argument("--mode", choices=("draft", "final"))
     subparsers.add_parser("scaffold", help="create chapter and paragraph Markdown structure")
@@ -311,6 +342,8 @@ def main(argv: list[str] | None = None) -> int:
         return assemble_abstract(args.project.resolve(), args.mode)
     if args.command == "build-abstract":
         return build_abstract(args.project.resolve(), args.mode)
+    if args.command == "build-abstract-release":
+        return build_abstract_release(args.project.resolve(), args.mode)
     if args.command == "build-all":
         return build_all(args.project.resolve(), args.mode)
     if args.command == "scaffold":
