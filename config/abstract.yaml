@@ -6,6 +6,26 @@ document:
 numbering:
   objects: global
 
+publications:
+  hanging_indent: 7.5mm
+  # Первая подходящая группа получает запись; порядок списка равен порядку групп.
+  groups:
+    - id: vak
+      title: Публикации в изданиях, рекомендованных ВАК РФ
+      keywords_any: [vak]
+    - id: indexed
+      title: Публикации в изданиях, индексируемых в Scopus и Web of Science
+      keywords_any: [scopus, wos, web-of-science]
+    - id: rights
+      title: Свидетельства и патенты
+      types: [software, patent]
+    - id: electronic
+      title: Электронные публикации
+      types: [online, www, electronic]
+    - id: other
+      title: Публикации в других изданиях
+      unmatched: true
+
 statistics:
   # Optional authoritative PDF. If omitted, Word or LibreOffice measures the
   # final dissertation DOCX during `build`/`build-all`.

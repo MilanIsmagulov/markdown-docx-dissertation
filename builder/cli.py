@@ -240,6 +240,7 @@ def assemble_abstract(project_root: Path, validation_mode: str | None = None) ->
             config.publications_bibliography, config.conferences_bibliography,
             statistics_override=stats,
             object_numbering=str(abstract_data.get("numbering", {}).get("objects", "global")),
+            publication_config=abstract_data.get("publications"),
         )
     except ValueError as exc:
         print(f"ERROR E_ABSTRACT_ASSET: {exc}")

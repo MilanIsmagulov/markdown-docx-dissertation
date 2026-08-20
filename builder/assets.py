@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from .bibliography import completed_entries, publication_counts, read_bib_entries
+from .bibliography import completed_entries, format_publication, group_publications, publication_counts, read_bib_entries
 
 
 DIRECTIVE_RE = re.compile(r"^```(?P<kind>table|figure|equation)\s*$")
@@ -118,6 +118,7 @@ def process_assets(
     conferences_bibliography: Path | None = None,
     statistics_override: dict[str, int] | None = None,
     object_numbering: str = "chapter",
+    publication_config: dict | None = None,
 ) -> str:
     if object_numbering not in {"chapter", "global"}:
         raise ValueError(f"unsupported object numbering profile: {object_numbering}")
@@ -322,28 +323,8 @@ def process_assets(
 
     assembled = STAT_RE.sub(replace_stat, assembled)
 
-    def format_publication(entry) -> str:
-        fields = entry.fields
-        authors = fields.get("author", "").replace(" and ", ", ")
-        container = fields.get("journal") or fields.get("booktitle", "")
-        parts = [f"{authors}. {fields.get('title', entry.key)}", container, fields.get("year", "")]
-        if fields.get("volume"):
-            parts.append(f"Т. {fields['volume']}")
-        if fields.get("number"):
-            parts.append(f"№ {fields['number']}")
-        if fields.get("pages"):
-            parts.append(f"С. {fields['pages'].replace('--', '–')}")
-        if fields.get("doi"):
-            parts.append(f"DOI: {fields['doi']}")
-        return ". ".join(item.rstrip(".") for item in parts if item) + "."
-
     publications = completed_entries(read_bib_entries(publications_bibliography))
-    groups = (
-        ("Публикации в изданиях, рекомендованных ВАК РФ", [e for e in publications if "vak" in e.keywords]),
-        ("Публикации в изданиях, индексируемых в Scopus и Web of Science", [e for e in publications if e.keywords & {"scopus", "wos", "web-of-science"}]),
-        ("Свидетельства и патенты", [e for e in publications if e.entry_type in {"software", "patent"}]),
-        ("Публикации в других изданиях", [e for e in publications if "other" in e.keywords]),
-    )
+    groups = group_publications(publications, publication_config)
     publication_lines = []
     ordinal = 1
     for title, entries in groups:
@@ -351,7 +332,7 @@ def process_assets(
             continue
         publication_lines.extend((f"**{title}:**", ""))
         for entry in entries:
-            publication_lines.append(f"{ordinal}. {format_publication(entry)}")
+            publication_lines.append(f"[[PUBLICATION:{ordinal}]] {format_publication(entry)}")
             ordinal += 1
         publication_lines.append("")
     assembled = PUBLICATION_LIST_RE.sub("\n".join(publication_lines).strip(), assembled)

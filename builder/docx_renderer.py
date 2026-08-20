@@ -20,6 +20,7 @@ from docx.shared import Cm, Mm, Pt, RGBColor
 
 
 SECTION_MARKER_RE = re.compile(r"^\[\[SECTION:(?P<name>[a-z][a-z0-9_-]*)]]$")
+PUBLICATION_MARKER_RE = re.compile(r"\[\[PUBLICATION:(?P<number>\d+)]]\s*")
 
 
 def _number(value: str, suffix: str) -> float:
@@ -266,6 +267,60 @@ def _replace_markers_in_runs(paragraph, pattern: re.Pattern, replacement) -> int
         for offset, node in enumerate(nodes):
             parent.insert(position + offset, node)
     return replacements
+
+
+def _format_publication_paragraphs(document: Document, abstract_config: dict) -> None:
+    publications = abstract_config.get("publications", {})
+    indent = publications.get("hanging_indent", "7.5mm") if isinstance(publications, dict) else "7.5mm"
+    indent_mm = Mm(_number(indent, "mm"))
+    numbering = document.part.numbering_part.element
+    abstract_ids = [int(node.get(qn("w:abstractNumId"))) for node in numbering.findall(qn("w:abstractNum"))]
+    num_ids = [int(node.get(qn("w:numId"))) for node in numbering.findall(qn("w:num"))]
+    abstract_id = max(abstract_ids, default=-1) + 1
+    num_id = max(num_ids, default=0) + 1
+    abstract_num = OxmlElement("w:abstractNum")
+    abstract_num.set(qn("w:abstractNumId"), str(abstract_id))
+    level = OxmlElement("w:lvl")
+    level.set(qn("w:ilvl"), "0")
+    for tag, value in (("w:start", "1"), ("w:numFmt", "decimal"), ("w:lvlText", "%1."), ("w:lvlJc", "right")):
+        node = OxmlElement(tag)
+        node.set(qn("w:val"), value)
+        level.append(node)
+    level_ppr = OxmlElement("w:pPr")
+    level_ind = OxmlElement("w:ind")
+    level_ind.set(qn("w:left"), str(round(indent_mm.twips)))
+    level_ind.set(qn("w:hanging"), str(round(indent_mm.twips)))
+    level_ppr.append(level_ind)
+    level.append(level_ppr)
+    abstract_num.append(level)
+    first_num = numbering.find(qn("w:num"))
+    if first_num is None:
+        numbering.append(abstract_num)
+    else:
+        numbering.insert(numbering.index(first_num), abstract_num)
+    num = OxmlElement("w:num")
+    num.set(qn("w:numId"), str(num_id))
+    abstract_ref = OxmlElement("w:abstractNumId")
+    abstract_ref.set(qn("w:val"), str(abstract_id))
+    num.append(abstract_ref)
+    numbering.append(num)
+    for paragraph in document.paragraphs:
+        if not PUBLICATION_MARKER_RE.search(paragraph.text):
+            continue
+        _replace_markers_in_runs(
+            paragraph,
+            PUBLICATION_MARKER_RE,
+            lambda match, rpr: [],
+        )
+        ppr = paragraph._p.get_or_add_pPr()
+        num_pr = OxmlElement("w:numPr")
+        ilvl = OxmlElement("w:ilvl")
+        ilvl.set(qn("w:val"), "0")
+        num_ref = OxmlElement("w:numId")
+        num_ref.set(qn("w:val"), str(num_id))
+        num_pr.extend((ilvl, num_ref))
+        ppr.append(num_pr)
+        paragraph.paragraph_format.keep_together = True
 
 
 def _sequence_nodes(match: re.Match, rpr, bookmark_id: int, scope: str) -> list[OxmlElement]:
@@ -1242,6 +1297,7 @@ def render_docx(
         first_chapter.paragraph_format.page_break_before = False
     if document_kind == "abstract":
         _prepend_abstract_front_matter(document, metadata, abstract_config)
+        _format_publication_paragraphs(document, abstract_config)
     else:
         _prepend_title_page(document, metadata)
     _request_field_updates(document)
