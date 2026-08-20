@@ -4,6 +4,8 @@ import shutil
 import subprocess
 import re
 import hashlib
+import base64
+import json
 from copy import deepcopy
 from pathlib import Path
 
@@ -21,6 +23,7 @@ from docx.shared import Cm, Mm, Pt, RGBColor
 
 SECTION_MARKER_RE = re.compile(r"^\[\[SECTION:(?P<name>[a-z][a-z0-9_-]*)]]$")
 PUBLICATION_MARKER_RE = re.compile(r"\[\[PUBLICATION:(?P<number>\d+)]]\s*")
+TABLE_CONFIG_MARKER_RE = re.compile(r"^\[\[TABLE_CONFIG:(?P<payload>[A-Za-z0-9_-]+)]]$")
 
 
 def _number(value: str, suffix: str) -> float:
@@ -461,7 +464,7 @@ def _format_numbered_objects(document: Document, styles: dict) -> None:
     family = styles["body"]["font"]["family"]
     for paragraph in document.paragraphs:
         text = paragraph.text.strip()
-        if text.startswith("Таблица "):
+        if text.startswith(("Таблица ", "Продолжение таблицы ")):
             paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
             paragraph.paragraph_format.first_line_indent = Mm(0)
             paragraph.paragraph_format.space_before = Pt(6)
@@ -541,11 +544,12 @@ def _format_numbered_objects(document: Document, styles: dict) -> None:
             border.set(qn("w:sz"), "4")
             border.set(qn("w:color"), "000000")
             borders.append(border)
-        column_width = Mm(usable_width_mm / len(table.columns))
+        column_count = len(table.columns)
+        column_width = Mm(usable_width_mm / column_count)
         grid = table._tbl.tblGrid
         for grid_column in list(grid):
             grid.remove(grid_column)
-        for _ in table.columns:
+        for _ in range(column_count):
             grid_column = OxmlElement("w:gridCol")
             grid_column.set(qn("w:w"), str(int(column_width.twips)))
             grid.append(grid_column)
@@ -575,6 +579,111 @@ def _format_numbered_objects(document: Document, styles: dict) -> None:
                         run.font.size = Pt(12)
                         if row_index == 0:
                             run.bold = True
+
+
+def _decode_table_config(payload: str) -> dict:
+    padding = "=" * (-len(payload) % 4)
+    try:
+        value = json.loads(base64.urlsafe_b64decode(payload + padding).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid advanced table configuration marker") from exc
+    if not isinstance(value, dict):
+        raise ValueError("advanced table configuration must be a mapping")
+    return value
+
+
+def _set_table_column_widths(table, widths: list[str], usable_width) -> None:
+    parsed = [Mm(_number(value, "mm")) for value in widths]
+    if len(parsed) != len(table.columns):
+        raise ValueError(f"table widths count must equal column count ({len(table.columns)})")
+    total = sum(parsed)
+    if total > usable_width:
+        scale = usable_width / total
+        parsed = [int(width * scale) for width in parsed]
+    table_width = table._tbl.tblPr.find(qn("w:tblW"))
+    if table_width is not None:
+        table_width.set(qn("w:type"), "dxa")
+        table_width.set(qn("w:w"), str(int(sum(parsed) / 635)))
+    for grid_column, width in zip(table._tbl.tblGrid, parsed):
+        grid_column.set(qn("w:w"), str(int(width / 635)))
+    for row in table.rows:
+        seen = set()
+        for index, cell in enumerate(row.cells):
+            identity = id(cell._tc)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            width = parsed[min(index, len(parsed) - 1)]
+            cell.width = width
+            tc_width = cell._tc.get_or_add_tcPr().find(qn("w:tcW"))
+            if tc_width is not None:
+                tc_width.set(qn("w:type"), "dxa")
+                tc_width.set(qn("w:w"), str(int(width / 635)))
+
+
+def _format_advanced_tables(document: Document) -> None:
+    body = document._element.body
+    indexes = _body_section_indexes(document)
+    sections = list(document.sections)
+    alignments = {
+        "left": WD_ALIGN_PARAGRAPH.LEFT,
+        "center": WD_ALIGN_PARAGRAPH.CENTER,
+        "right": WD_ALIGN_PARAGRAPH.RIGHT,
+        "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+    }
+    for paragraph in list(document.paragraphs):
+        match = TABLE_CONFIG_MARKER_RE.fullmatch(paragraph.text.strip())
+        if match is None:
+            continue
+        config = _decode_table_config(match["payload"])
+        sibling = paragraph._p.getnext()
+        while sibling is not None and sibling.tag != qn("w:tbl"):
+            sibling = sibling.getnext()
+        table = next((candidate for candidate in document.tables if candidate._tbl is sibling), None)
+        if table is None:
+            raise ValueError("advanced table marker is not followed by a table")
+        section = sections[indexes.get(sibling, 0)]
+        usable_width = section.page_width - section.left_margin - section.right_margin
+
+        widths = config.get("widths")
+        if widths:
+            _set_table_column_widths(table, [str(value) for value in widths], usable_width)
+        align = config.get("align")
+        if align:
+            for row in table.rows:
+                for column, value in enumerate(align):
+                    if column >= len(row.cells):
+                        break
+                    alignment = alignments[str(value).casefold()]
+                    for cell_paragraph in row.cells[column].paragraphs:
+                        cell_paragraph.alignment = alignment
+        if config.get("repeat_header") is False and table.rows:
+            properties = table.rows[0]._tr.get_or_add_trPr()
+            for header in list(properties.findall(qn("w:tblHeader"))):
+                properties.remove(header)
+        for cell_range in config.get("merges", []):
+            match_range = re.fullmatch(r"([A-Z]+)(\d+):([A-Z]+)(\d+)", str(cell_range).upper())
+            if match_range is None:
+                raise ValueError(f"invalid merged cell range: {cell_range}")
+            from openpyxl.utils.cell import column_index_from_string
+
+            start_col = column_index_from_string(match_range.group(1)) - 1
+            start_row = int(match_range.group(2)) - 1
+            end_col = column_index_from_string(match_range.group(3)) - 1
+            end_row = int(match_range.group(4)) - 1
+            if end_row >= len(table.rows) or end_col >= len(table.columns):
+                raise ValueError(f"merged cell range is outside the table: {cell_range}")
+            table.cell(start_row, start_col).merge(table.cell(end_row, end_col))
+        paragraph._p.getparent().remove(paragraph._p)
+
+    for paragraph in document.paragraphs:
+        if paragraph.text.startswith(("Примечание.", "Источник:")):
+            paragraph.paragraph_format.first_line_indent = Mm(0)
+            paragraph.paragraph_format.space_before = Pt(2)
+            paragraph.paragraph_format.space_after = Pt(2)
+            for run in paragraph.runs:
+                run.font.name = "Times New Roman"
+                run.font.size = Pt(12)
 
 
 def _format_numbered_equations(document: Document, styles: dict) -> None:
@@ -1308,6 +1417,7 @@ def render_docx(
     if document_kind == "dissertation":
         _apply_section_profiles(document, project_root, styles)
     _fit_objects_to_sections(document)
+    _format_advanced_tables(document)
     for paragraph in document.paragraphs:
         if paragraph._p.xpath(".//m:oMathPara"):
             paragraph.style = document.styles["Equation"]
