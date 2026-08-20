@@ -20,10 +20,12 @@ from builder.docx_renderer import (
 from builder.config import load_document_config
 from builder.cli import archive_previous_versions, next_versioned_output
 from builder.bibliography import publication_counts, read_bib_entries
+from builder.statistics import measure_docx_pages, read_statistics_manifest, source_statistics, write_statistics_manifest
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm
+from pypdf import PdfWriter
 
 
 def write_note(root: Path, relative: str, text: str) -> Path:
@@ -489,6 +491,78 @@ def test_document_and_publication_statistics_are_expanded(tmp_path: Path) -> Non
     assert "[[STAT:pages]]/1/1/1/2/1/1/1/0 рисунков/1 приложение" in result
     counts = publication_counts(read_bib_entries(publications))
     assert counts["publications"] == 2
+
+
+def test_statistics_override_materializes_dissertation_pages_and_inflection(tmp_path: Path) -> None:
+    result = process_assets(
+        "{{stat:pages}}; {{stat_phrase:pages}}; включая {{stat_phrase:tables:acc}}; "
+        "на {{stat_phrase:conferences:prep}}",
+        tmp_path,
+        statistics_override={"pages": 176, "tables": 1, "conferences": 2},
+    )
+
+    assert result.strip() == "176; 176 страниц; включая 1 таблицу; на 2 мероприятиях"
+
+
+def test_pending_publications_are_excluded_from_all_counters(tmp_path: Path) -> None:
+    publications = tmp_path / "publications.bib"
+    publications.write_text(
+        "@article{done, author={A}, title={T}, journal={J}, year={2026}, keywords={vak, scopus}}\n"
+        "@article{pending, title={T2}, status={pending}, keywords={vak, wos}}",
+        encoding="utf-8",
+    )
+
+    counts = publication_counts(read_bib_entries(publications))
+
+    assert counts["publications"] == 1
+    assert counts["publications_vak"] == 1
+    assert counts["publications_scopus"] == 1
+    assert counts["publications_wos"] == 0
+
+    root = write_note(tmp_path, "root.md", "# Root\n")
+    diagnostics = validate_index(
+        build_index(tmp_path, tmp_path / "content"), root,
+        publications_bibliography=publications,
+    )
+    assert not any("pending" in item.message and item.code == "E_BIB_FIELD_MISSING" for item in diagnostics)
+
+
+def test_page_count_uses_authoritative_pdf_and_statistics_manifest(tmp_path: Path) -> None:
+    docx = tmp_path / "build" / "dissertation-v1.docx"
+    docx.parent.mkdir()
+    docx.write_bytes(b"docx-placeholder")
+    pdf = tmp_path / "dissertation.pdf"
+    writer = PdfWriter()
+    for _ in range(3):
+        writer.add_blank_page(width=595, height=842)
+    with pdf.open("wb") as stream:
+        writer.write(stream)
+
+    pages = measure_docx_pages(docx, pdf)
+    manifest = write_statistics_manifest(tmp_path, docx, {"pages": pages, "figures": 2})
+    source, statistics = read_statistics_manifest(tmp_path)
+
+    assert manifest.is_file()
+    assert source == docx
+    assert statistics == {"pages": 3, "figures": 2}
+
+
+def test_source_statistics_excludes_abstract_only_objects(tmp_path: Path) -> None:
+    write_note(tmp_path, "chapter.md", "---\ntype: chapter\n---\n\n```figure\nid: f\n```\n")
+    write_note(tmp_path, "appendix.md", "---\ntype: appendix\n---\n\n```table\nid: t\n```\n")
+    write_note(
+        tmp_path, "abstract.md",
+        "---\ntype: abstract\n---\n\n```figure\nid: abstract-only\n```\n",
+    )
+
+    statistics = source_statistics(
+        build_index(tmp_path, tmp_path / "content"), None, None, None,
+    )
+
+    assert statistics["chapters"] == 1
+    assert statistics["appendices"] == 1
+    assert statistics["figures"] == 1
+    assert statistics["tables"] == 1
 
 
 def test_conference_registry_generates_list_and_statistics(tmp_path: Path) -> None:

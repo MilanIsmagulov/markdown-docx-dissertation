@@ -13,6 +13,12 @@ from .assets import process_assets
 from .docx_renderer import render_docx
 from .resolver import build_index
 from .scaffold import scaffold
+from .statistics import (
+    measure_docx_pages,
+    read_statistics_manifest,
+    source_statistics,
+    write_statistics_manifest,
+)
 from .validator import validate_index
 
 
@@ -152,7 +158,22 @@ def assemble(project_root: Path) -> int:
     return 0
 
 
-def build(project_root: Path) -> int:
+def _record_dissertation_statistics(project_root: Path, config, index, output: Path) -> Path:
+    abstract_data = _load_abstract_config(project_root)
+    statistics_config = abstract_data.get("statistics", {})
+    if not isinstance(statistics_config, dict):
+        raise ValueError("abstract.statistics must be a mapping")
+    pdf_value = statistics_config.get("dissertation_pdf")
+    pdf = project_root / str(pdf_value) if pdf_value else None
+    stats = source_statistics(
+        index, config.bibliography, config.publications_bibliography,
+        config.conferences_bibliography,
+    )
+    stats["pages"] = measure_docx_pages(output, pdf)
+    return write_statistics_manifest(project_root, output, stats)
+
+
+def build(project_root: Path, require_statistics: bool = False) -> int:
     assembled = assemble(project_root)
     if assembled:
         return assembled
@@ -175,6 +196,15 @@ def build(project_root: Path) -> int:
     print(f"Built DOCX: {output.relative_to(project_root)}")
     if archived:
         print(f"Archived {len(archived)} previous version(s) to {output.parent.name}\\.old")
+    index = build_index(project_root, config.content_dir)
+    try:
+        manifest = _record_dissertation_statistics(project_root, config, index, output)
+        print(f"Recorded dissertation statistics: {manifest.relative_to(project_root)}")
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        level = "ERROR" if require_statistics else "WARNING"
+        print(f"{level} E_STATISTICS_PAGES: {exc}")
+        if require_statistics:
+            return 1
     return 0
 
 
@@ -199,15 +229,11 @@ def assemble_abstract(project_root: Path, validation_mode: str | None = None) ->
     if root_note is None:
         print(f"ERROR E_ABSTRACT_ROOT: {root_path}")
         return 1
-    metadata = yaml.safe_load((project_root / "config" / "metadata.yaml").read_text(encoding="utf-8-sig")) or {}
-    structure = metadata.get("structure", {})
-    source_text = "\n".join(note.body for note in index.notes if str(note.metadata.get("type", "")) != "abstract")
-    stats = {
-        "chapters": int(structure.get("chapters", 0)),
-        "appendices": int(structure.get("appendices", 0)),
-        "figures": len(re.findall(r"^```figure\s*$", source_text, re.MULTILINE)),
-        "tables": len(re.findall(r"^```table\s*$", source_text, re.MULTILINE)),
-    }
+    try:
+        _, stats = read_statistics_manifest(project_root)
+    except ValueError as exc:
+        print(f"ERROR E_ABSTRACT_STATISTICS: {exc}")
+        return 1
     try:
         assembled = process_assets(
             assemble_note(index, root_note), config.content_dir, config.bibliography,
@@ -249,6 +275,12 @@ def build_abstract(project_root: Path, validation_mode: str | None = None) -> in
     return 0
 
 
+def build_all(project_root: Path, validation_mode: str | None = None) -> int:
+    if build(project_root, require_statistics=True):
+        return 1
+    return build_abstract(project_root, validation_mode)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="md2docx")
     parser.add_argument("--project", type=Path, default=Path.cwd())
@@ -262,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
     abstract_assembler.add_argument("--mode", choices=("draft", "final"))
     abstract_builder = subparsers.add_parser("build-abstract", help="assemble and render abstract DOCX")
     abstract_builder.add_argument("--mode", choices=("draft", "final"))
+    full_builder = subparsers.add_parser("build-all", help="build dissertation, collect final statistics, then build abstract")
+    full_builder.add_argument("--mode", choices=("draft", "final"))
     subparsers.add_parser("scaffold", help="create chapter and paragraph Markdown structure")
     args = parser.parse_args(argv)
     if args.command == "validate":
@@ -276,6 +310,8 @@ def main(argv: list[str] | None = None) -> int:
         return assemble_abstract(args.project.resolve(), args.mode)
     if args.command == "build-abstract":
         return build_abstract(args.project.resolve(), args.mode)
+    if args.command == "build-all":
+        return build_all(args.project.resolve(), args.mode)
     if args.command == "scaffold":
         try:
             created, chapters = scaffold(args.project.resolve())

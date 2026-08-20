@@ -23,6 +23,10 @@ class BibEntry:
         raw = self.fields.get("keywords", "")
         return {item.strip().casefold() for item in re.split(r"[,;]", raw) if item.strip()}
 
+    @property
+    def is_pending(self) -> bool:
+        return self.fields.get("status", "").casefold() == "pending" or "pending" in self.keywords
+
 
 def read_bib_entries(path: Path | None) -> list[BibEntry]:
     if path is None or not path.is_file():
@@ -60,11 +64,18 @@ def read_bib_entries(path: Path | None) -> list[BibEntry]:
     return entries
 
 
+def completed_entries(entries: list[BibEntry]) -> list[BibEntry]:
+    return [entry for entry in entries if not entry.is_pending]
+
+
 def publication_counts(entries: list[BibEntry]) -> dict[str, int]:
+    entries = completed_entries(entries)
     return {
         "publications": len(entries),
         "publications_vak": sum("vak" in entry.keywords for entry in entries),
         "publications_scopus_wos": sum(bool(entry.keywords & {"scopus", "wos", "web-of-science"}) for entry in entries),
+        "publications_scopus": sum("scopus" in entry.keywords for entry in entries),
+        "publications_wos": sum(bool(entry.keywords & {"wos", "web-of-science"}) for entry in entries),
         "publications_other": sum("other" in entry.keywords for entry in entries),
         "patents": sum(entry.entry_type == "patent" or "patent" in entry.keywords for entry in entries),
         "software_registrations": sum(

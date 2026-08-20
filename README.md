@@ -93,10 +93,15 @@ symbols:
 
 В Markdown доступны числовые маркеры `{{stat:...}}`: `pages`, `chapters`, `figures`,
 `tables`, `appendices`, `bibliography`, `publications`, `publications_vak`,
-`publications_scopus_wos`, `publications_other`, `software_registrations` и `patents`.
-Число страниц создаётся динамическим полем Word `NUMPAGES`; остальные значения
-рассчитываются из структуры проекта, директив объектов и BibTeX. Для склоняемой формы
-доступен маркер `{{stat_phrase:figures}}` — например, «1 рисунок» или «5 рисунков».
+`publications_scopus`, `publications_wos`, `publications_scopus_wos`,
+`publications_other`, `software_registrations`, `patents` и `conferences`.
+В самой диссертации число страниц создаётся динамическим полем Word `NUMPAGES`; для
+автореферата используется фактическое число страниц финального DOCX/PDF диссертации.
+Остальные значения рассчитываются из структуры проекта, директив объектов и BibTeX.
+Для склоняемой формы доступен маркер `{{stat_phrase:figures}}` — например, «1 рисунок»
+или «5 рисунков». Необходимый падеж можно указать суффиксом: `:acc` для винительного и
+`:prep` для предложного, например `{{stat_phrase:tables:acc}}` и
+`{{stat_phrase:conferences:prep}}`.
 
 ## Публикации автора и типы BibTeX
 
@@ -104,7 +109,8 @@ symbols:
 патенты и регистрации программ — в `bibliography/publications.bib`. Обе библиотеки
 доступны для цитирования, но показатели раздела «Публикации автора» считаются только
 по второй. Классификация задаётся полем `keywords`: `vak`, `scopus`, `wos`, `other`,
-`patent`, `software-registration`.
+`patent`, `software-registration`. Запись с `status = {pending}` или ключевым словом
+`pending` не попадает в печатный список и автоматические счётчики.
 
 Валидатор поддерживает и проверяет обязательные поля для `article`, `inproceedings`,
 `book`, `online`/`www`, `standard`, `patent`, `phdthesis`, `mastersthesis`, `techreport`
@@ -327,7 +333,7 @@ width: 150mm
 ```
 
 Маркер `{{list:conferences}}` формирует хронологический список мероприятий. Доступны также
-`{{stat:conferences}}` и склоняемый `{{stat_phrase:conferences}}`. Один общий файл апробации
+`{{stat:conferences}}` и склоняемый `{{stat_phrase:conferences:prep}}`. Один общий файл апробации
 `content/_shared/research/Апробация.md` подключается и в диссертацию, и в автореферат.
 
 ## Сборка автореферата
@@ -394,3 +400,26 @@ validation:
 работы или DOI, которые не должны попасть в публичную демонстрационную сборку. Поля из
 `allowed_placeholder_fields` могут оставаться линиями для ручного заполнения даже в
 режиме `final` — это нужно для даты защиты, времени заседания и даты рассылки.
+
+### Двухпроходная сборка и фактическая статистика
+
+Рекомендуемая команда полного выпуска:
+
+```powershell
+python build.py build-all --mode draft
+```
+
+Она последовательно собирает диссертацию, получает фактическое число страниц через Word
+или LibreOffice, записывает `build/dissertation-statistics.json` и только затем собирает
+автореферат. Manifest содержит страницы, главы, рисунки, таблицы, приложения, источники,
+мероприятия, публикации, патенты и свидетельства. `build-abstract` и
+`assemble-abstract` требуют актуальный manifest и не подменяют число страниц оценкой по
+Markdown.
+
+Если имеется утверждённый PDF диссертации, его можно сделать приоритетным источником
+пагинации:
+
+```yaml
+statistics:
+  dissertation_pdf: build/dissertation.pdf
+```
